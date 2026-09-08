@@ -1,0 +1,29 @@
+# Runs the official Flathub linter (ghcr.io/flathub/flatpak-builder-lint) against the
+# drop-in submission directory under packaging/flathub — preflight before the Flathub
+# review bot. Dispatch only:
+#   gh workflow run flathub-lint.yml --repo Graphene-Lab/AgentBridge-Linux
+name: Flathub lint (official builder-lint)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub/flatpak-builder-lint:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint the manifest
+        shell: bash
+        run: |
+          flatpak-builder-lint manifest \
+            packaging/flathub/io.github.graphene_lab.agentbridge/io.github.graphene_lab.agentbridge.yml || true
+
+      - name: Lint the AppStream data
+        shell: bash
+        run: |
+          flatpak-builder-lint appstream \
+            packaging/flathub/io.github.graphene_lab.agentbridge/io.github.graphene_lab.agentbridge.metainfo.xml \
+            packaging/flathub/io.github.graphene_lab.agentbridge/icons || true

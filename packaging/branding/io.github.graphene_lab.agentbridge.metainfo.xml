@@ -5,7 +5,9 @@
   <project_license>AGPL-3.0-or-later</project_license>
   <name>AgentBridge</name>
   <summary>Self-hosted AI personal assistant that automates office work</summary>
-  <developer id="io.github.graphene_lab">Graphene-Lab</developer>
+  <developer id="io.github.graphene_lab">
+    <name>Graphene-Lab</name>
+  </developer>
 
   <url type="homepage">https://github.com/Graphene-Lab/AgentBridge</url>
   <url type="help">https://graphenelab.it/AgentBridge/</url>

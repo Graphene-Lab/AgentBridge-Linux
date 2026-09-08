@@ -21,8 +21,7 @@ apps:
   agentbridge:
     command: bin/agentbridge-launcher
   agentbridge-headless:
-    command: bin/agentbridge-launcher
-    args: [--headless]
+    command: bin/agentbridge-launcher --headless
 
 parts:
   engine:

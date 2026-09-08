@@ -176,6 +176,9 @@ jobs:
           done
           ls -R build-icons | head -20
 
+      - name: Install Flatpak + flatpak-builder
+        uses: flatpak/flatpak-github-actions/flatpak-install@v6
+
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:

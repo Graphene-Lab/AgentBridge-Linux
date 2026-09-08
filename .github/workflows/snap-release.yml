@@ -66,7 +66,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/build -w /build/snap \
             snapcore/snapcraft:stable sh -c \
-            "snapcraft --destructive-mode -o out && ls -lh out/*.snap"
+            "snapcraft --destructive-mode && ls -lh *.snap"
 
       - name: Publish to the Snap Store
         shell: bash
@@ -80,4 +80,4 @@ jobs:
           docker run --rm -v "$PWD":/build -w /build/snap \
             -e SNAPCRAFT_STORE_CREDENTIALS \
             snapcore/snapcraft:stable sh -c \
-            "snapcraft upload out/*.snap --release=stable"
+            "snapcraft upload *.snap --release=stable"

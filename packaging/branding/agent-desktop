@@ -246,24 +246,17 @@ def main():
     args = parser.parse_args()
 
     if args.doctor:
+        # Each probe runs in its own process: gi.require_version is process-global,
+        # so GTK4 + GTK3 cannot both be requested in one interpreter.
+        probes = {
+            "gi (GObject Introspection)": "import gi",
+            "WebKit (GTK4)": "import gi; gi.require_version('Gtk','4.0'); gi.require_version('WebKit','6.0')",
+            "WebKit2 (GTK3)": "import gi; gi.require_version('Gtk','3.0'); gi.require_version('WebKit2','4.1')",
+        }
         diag = []
-        for probe in (
-            "gi (GObject Introspection)",
-            "WebKit (GTK4)",
-            "WebKit2 (GTK3)",
-        ):
-            try:
-                import gi  # noqa: PLC0415
-
-                if "WebKit (GTK4)" == probe:
-                    gi.require_version("Gtk", "4.0")
-                    gi.require_version("WebKit", "6.0")
-                elif "WebKit2 (GTK3)" == probe:
-                    gi.require_version("Gtk", "3.0")
-                    gi.require_version("WebKit2", "4.1")
-                diag.append(f"{probe}: OK")
-            except Exception as exc:  # noqa: BLE001
-                diag.append(f"{probe}: unavailable ({exc})")
+        for label, code in probes.items():
+            proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+            diag.append(f"{label}: {'OK' if proc.returncode == 0 else 'unavailable (' + (proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else proc.returncode) + ')'}")
         diag.append(f"python: {sys.version.split()[0]}")
         diag.append(f"engine image: {'OK' if os.path.isfile(os.path.join(IMAGE, 'agent')) else 'MISSING'}")
         client_ok = os.path.isfile(os.path.join(IMAGE, "GiraffeAIWebClient", "index.html"))

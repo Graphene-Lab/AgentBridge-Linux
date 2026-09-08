@@ -139,13 +139,12 @@ jobs:
           sudo flatpak install --system -y --noninteractive flathub \
             org.gnome.Platform//48 org.gnome.Sdk//48
 
-      - name: Build engine from source (flatpak-builder, network allowed)
+      - name: Build engine from source (flatpak-builder, module network)
         shell: bash
         run: |
           sudo flatpak-builder \
             --force-clean \
             --disable-rofiles-fuse \
-            --allow-network-access \
             --repo=repo-proof \
             .build-proof \
             packaging/source/agentbridge.yml

@@ -41,6 +41,11 @@ modules:
   # single-file self-contained configuration the AgentBridge CI uses.
   - name: agentbridge-source
     buildsystem: simple
+    # Phase 1 only: dev-machine semantics (nuget.org restore + model/voice asset
+    # downloads inside the module). Phase 2 (Flathub-ready) removes this block and
+    # switches the module to the offline nuget-sources.json feed.
+    build-options:
+      network: true
     build-commands:
       - |
         export DOTNET_ROOT="$PWD/dotnet-sdk"

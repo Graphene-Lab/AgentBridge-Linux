@@ -24,6 +24,5 @@ jobs:
       - name: Lint the AppStream data
         shell: bash
         run: |
-          # appstream lint expects a directory containing <appid>.metainfo.xml
           flatpak-builder-lint appstream \
-            packaging/flathub/io.github.graphene_lab.agentbridge/branding || true
+            packaging/flathub/io.github.graphene_lab.agentbridge/branding/io.github.graphene_lab.agentbridge.metainfo.xml || true

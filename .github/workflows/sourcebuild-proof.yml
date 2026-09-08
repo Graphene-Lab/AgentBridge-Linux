@@ -2,17 +2,18 @@
 #
 # Validates the Flathub build model end-to-end on OUR CI: the engine is compiled from
 # the AgentBridge source tag inside a flatpak sandbox, NuGet is restored OFFLINE from a
-# local feed (flatpak-dotnet-generator + nuget-sources.json), and the bundle is produced
-# with the same web client + branding as the release bundle. Run manually:
+# local feed, and the bundle is produced with the same web client + branding as the
+# release bundle. Run manually:
 #
 #   gh workflow run sourcebuild-proof.yml -f version=v1.26.09.08   # or "latest"
 #
-# Build commands have NO network in flatpak-builder (flatpak-builder 1.2 on Debian) —
-# everything the engine needs is staged as module sources before the build:
+# Build commands have NO network in flatpak-builder (1.2 on Debian) — everything the
+# engine needs is staged as module sources before the build:
 #   - .NET SDK tarball (module source)
-#   - nuget-sources.json (every nupkg, module source → ./nuget-sources feed)
-#   - kokoro.onnx + Tools/ + .playwright extracted from the release archive (file/dir
-#     sources, staged in packaging/.proof-staging, gitignored)
+#   - nuget-sources.json (one source per nupkg, staged into ./nuget-sources by the
+#     flatpak-dotnet-generator, run inside org.freedesktop.Sdk//24.08 + dotnet10 ext)
+#   - kokoro.onnx + Tools/ + .playwright extracted from the release archive
+#     (packaging/.proof-staging, gitignored)
 #   - GiraffeAI web client zip + branding
 name: Source-Build Proof (experimental)
 
@@ -48,13 +49,21 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq flatpak flatpak-builder librsvg2-bin xvfb
 
-      - name: Setup .NET (for the NuGet lock/generator)
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
+      # Everything flatpak needs in this job, installed once up-front:
+      #  - org.gnome.*48   → the app runtime/SDK (builder)
+      #  - org.freedesktop.Sdk//24.08 + Extension.dotnet10 → the flatpak-dotnet-generator
+      #    environment (it runs `dotnet restore` inside that SDK, then reads the .sha512
+      #    files NuGet writes into the packages dir)
+      - name: Add Flathub remote + install runtimes and SDKs
+        shell: bash
+        run: |
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y --noninteractive flathub \
+            org.gnome.Platform//48 org.gnome.Sdk//48 \
+            org.freedesktop.Sdk//24.08 \
+            org.freedesktop.Sdk.Extension.dotnet10//24.08
 
       - name: Resolve upstream tag + commit
-        id: ver
         shell: bash
         run: |
           latest_tag() {
@@ -102,14 +111,18 @@ jobs:
 
       - name: Generate nuget-sources.json (offline feed descriptor)
         shell: bash
+        env:
+          # flatpak (run as the ubuntu user) needs a writable XDG_RUNTIME_DIR.
+          XDG_RUNTIME_DIR: /tmp/flatpak-run
         run: |
+          mkdir -p /tmp/flatpak-run && chmod 700 /tmp/flatpak-run
           curl -fsSL -o "$RUNNER_TEMP/generator.py" \
             https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/dotnet/flatpak-dotnet-generator.py
           python3 "$RUNNER_TEMP/generator.py" \
             packaging/source/nuget-sources.json \
             "${{ env.STAGING }}/src/AgentBridge.csproj" \
-            --runtime linux-x64
-          python3 -c "import json;d=json.load(open('packaging/source/nuget-sources.json'));print('packages:',len(d));print(json.dumps(d[0],indent=1)[:600])"
+            -f 24.08 -d 10 -r linux-x64
+          python3 -c "import json;d=json.load(open('packaging/source/nuget-sources.json'));print('packages:',len(d));print(json.dumps(d[0],indent=1)[:500])"
 
       - name: Stage payload (kokoro.onnx, Tools/, .playwright) from the release archive
         shell: bash
@@ -177,13 +190,6 @@ jobs:
           print("rendered packaging/source/agentbridge.yml with",
                 len(nuget), "nuget sources merged")
           PY
-
-      - name: Add Flathub remote + install GNOME runtime/SDK (x86_64)
-        shell: bash
-        run: |
-          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          sudo flatpak install --system -y --noninteractive flathub \
-            org.gnome.Platform//48 org.gnome.Sdk//48
 
       - name: Build engine from source (offline restore)
         shell: bash

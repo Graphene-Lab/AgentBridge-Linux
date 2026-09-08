@@ -41,8 +41,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # gh CLI in Actions does not always pick up GITHUB_TOKEN automatically; export it
-  # under gh's own variable so every gh call in this workflow is authenticated.
+  # Container jobs do not receive GITHUB_TOKEN automatically; export the token under
+  # GH_TOKEN (workflow env) and use it in every authenticated API call.
   GH_TOKEN: ${{ github.token }}
   APPID: io.github.graphene_lab.agentbridge
   UPSTREAM: Graphene-Lab/AgentBridge
@@ -64,7 +64,7 @@ jobs:
         run: |
           UPSTREAM="${{ env.UPSTREAM }}"
           CLIENT="${{ env.CLIENT_REPO }}"
-          # Read public release info anonymously: the workflow GITHUB_TOKEN only covers
+          # Read public release info anonymously: the repo-scoped workflow token only covers
           # THIS repo, and sending it to another repo's public endpoint returns 404.
           latest_tag() {
             curl -fsSL "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
@@ -252,20 +252,20 @@ jobs:
           print(json.dumps(payload))
           PY
           RESP=$(curl -fsS -X POST \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" \
             --data-binary @release-payload.json) || true
           if [ -z "$RESP" ]; then
             # Tag/release already exists (manual re-run of the same version): reuse it.
-            RESP=$(curl -fsS -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            RESP=$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")
           fi
           echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])' > release-id.txt
           UPLOAD=$(echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["upload_url"].split("{")[0])')
           for f in agentbridge-linux-x86_64.flatpak agentbridge-linux-x86_64.flatpak.sha256; do
             curl -fsS -X POST \
-              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "Content-Type: application/octet-stream" \
               --data-binary "@$f" \
               "${UPLOAD}?name=${f}"

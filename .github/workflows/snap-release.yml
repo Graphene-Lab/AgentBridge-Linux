@@ -64,9 +64,12 @@ jobs:
       - name: Build the snap
         shell: bash
         run: |
-          docker run --rm -v "$PWD":/build -w /build/snap \
-            snapcore/snapcraft:stable sh -c \
-            "snapcraft --destructive-mode && ls -lh *.snap"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq snapd
+          sudo snap install snapcraft --classic
+          cd snap
+          sudo snapcraft --destructive-mode
+          ls -lh *.snap
 
       - name: Publish to the Snap Store
         shell: bash
@@ -77,7 +80,5 @@ jobs:
             echo "SNAPCRAFT_STORE_CREDENTIALS not configured — snap built locally, publish skipped"
             exit 0
           fi
-          docker run --rm -v "$PWD":/build -w /build/snap \
-            -e SNAPCRAFT_STORE_CREDENTIALS \
-            snapcore/snapcraft:stable sh -c \
-            "snapcraft upload *.snap --release=stable"
+          cd snap
+          snapcraft upload *.snap --release=stable

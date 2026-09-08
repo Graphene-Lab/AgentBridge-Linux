@@ -75,6 +75,12 @@ jobs:
           TARGET="${{ inputs.version }}"
           if [ -z "$TARGET" ] || [ "$TARGET" = "latest" ]; then
             TARGET="$(latest_tag "$UPSTREAM")"
+            if [ -z "$TARGET" ]; then
+              echo "::error::cannot read the latest release of ${UPSTREAM} (curl auth+anonymous failed)"
+              curl -sS -w '\nHTTP %{http_code}\n' "https://api.github.com/repos/${UPSTREAM}/releases/latest" | tail -5
+              echo "do_build=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
           if [ -z "$TARGET" ]; then
             echo "could not resolve an upstream AgentBridge release — nothing to do"

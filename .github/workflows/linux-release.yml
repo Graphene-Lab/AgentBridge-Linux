@@ -166,13 +166,13 @@ jobs:
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          manifest: packaging/agentbridge.yml
+          manifest-path: packaging/agentbridge.yml
           arch: x86_64
           cache-key: flatpak-${{ env.VER }}
-          repo: repo
           bundle: agentbridge-linux-x86_64.flatpak
-          bundle-name: agentbridge-linux-x86_64
+          repo-dir: repo
           run-tests: false
+          upload-artifact: false
 
       - name: Smoke check (doctor inside the installed app)
         shell: bash

@@ -264,10 +264,17 @@ jobs:
           echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])' > release-id.txt
           UPLOAD=$(echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["upload_url"].split("{")[0])')
           for f in agentbridge-linux-x86_64.flatpak agentbridge-linux-x86_64.flatpak.sha256; do
+            # Re-publishing the same version (force): the release already exists and its
+            # assets must be replaced, not duplicated (asset names are unique per release).
+            EXISTING=$(echo "$RESP" | python3 -c "import sys,json; rel=json.load(sys.stdin); print(next((str(a['id']) for a in rel.get('assets', []) if a['name'] == sys.argv[1]), ''))" "$f")
+            if [ -n "$EXISTING" ]; then
+              curl -fsS -X DELETE -H "Authorization: Bearer ${GH_TOKEN}" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${EXISTING}" || true
+            fi
             curl -fsS -X POST \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "Content-Type: application/octet-stream" \
               --data-binary "@$f" \
-              "${UPLOAD}?name=${f}"
+              "${UPLOAD}?name=${f}" >/dev/null
           done
           echo "published ${TAG} → https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"

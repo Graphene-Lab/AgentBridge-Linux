@@ -264,47 +264,67 @@ def main():
         print("\n".join(diag))
         return 0
 
+    engine_proc = None
+    httpd = None
     try:
         agent_bin = ensure_engine()
         base = read_engine_base()
-        proc = start_engine(agent_bin, base)
+        engine_proc = start_engine(agent_bin, base)
         httpd = serve_client(os.path.join(ENGINE_DIR, "GiraffeAIWebClient"))
         url = provider_url(httpd.server_address[1], base)
 
-        def stop(signum=None, frame=None):
+        def stop(_signum=None, _frame=None):
             log("shutting down")
-            if proc is not None and proc.poll() is None:
-                proc.terminate()
+            if engine_proc is not None and engine_proc.poll() is None:
+                engine_proc.terminate()
                 try:
-                    proc.wait(timeout=8)
+                    engine_proc.wait(timeout=8)
                 except subprocess.TimeoutExpired:
-                    proc.kill()
-            if httpd:
+                    engine_proc.kill()
+            if httpd is not None:
                 threading.Thread(target=httpd.shutdown, daemon=True).start()
-            sys.exit(0)
+            raise SystemExit(0)
 
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
 
+        ok = False
+        detail = ""
         if not args.browser:
             ok, detail = open_webview(url)
             if ok:
-                log(f"desktop window closed (engine {'kept running' if proc is None else 'stopped'})")
+                log(f"desktop window closed (engine {'kept running' if engine_proc is None else 'stopped'})")
                 stop()
-                return 0
-            log(f"WebKitGTK unavailable ({detail}) — falling back to the default browser")
+        else:
+            detail = "--browser requested"
 
-        log(f"opening the web client in the default browser: {url}")
-        subprocess.Popen(
-            ["xdg-open", url],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        log("desktop mode running (Ctrl+C to stop)")
-        while True:
-            time.sleep(3600)
+        if not ok:
+            log(f"WebKitGTK unavailable ({detail}) — opening the web client in the default browser")
+            opener = shutil.which("xdg-open")
+            if opener is not None:
+                subprocess.Popen(
+                    [opener, url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                log(f"xdg-open not found in the sandbox — open this URL manually: {url}")
+            log("desktop mode running (Ctrl+C to stop)")
+            while True:
+                time.sleep(3600)
+    except SystemExit:
+        raise
     except Exception as exc:  # noqa: BLE001
-        print(f"[agent-desktop] ERROR: {exc}", file=sys.stderr, flush=True)
+        log(f"ERROR: {exc}")
+        # Never leave an engine we spawned or a stray web server running.
+        if engine_proc is not None and engine_proc.poll() is None:
+            engine_proc.terminate()
+            try:
+                engine_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                engine_proc.kill()
+        if httpd is not None:
+            threading.Thread(target=httpd.shutdown, daemon=True).start()
         return 1
 
 

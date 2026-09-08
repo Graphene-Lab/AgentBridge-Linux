@@ -1,0 +1,13 @@
+# Rendered / generated during the CI build (see linux-release.yml)
+packaging/agentbridge.yml
+build-icon.svg
+build-icons/
+repo/
+*.flatpak
+*.flatpak.sha256
+agentbridge-linux-x64.tar.gz
+giraffeai.zip
+
+# OS noise
+.DS_Store
+Thumbs.db

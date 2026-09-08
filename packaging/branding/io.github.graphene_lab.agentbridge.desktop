@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AgentBridge
+GenericName=AI Personal Assistant
+Comment=Chat with your self-hosted AI office assistant in a desktop window
+Exec=agent-desktop
+Icon=io.github.graphene_lab.agentbridge
+Terminal=false
+Categories=Network;Utility;
+Keywords=AI;assistant;agent;chat;OpenAI;office;automation;giraffe;
+X-GNOME-UsesNotifications=true

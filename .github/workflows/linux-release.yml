@@ -1,0 +1,222 @@
+# AgentBridge Linux — automatic Flatpak publication.
+#
+# Watches Graphene-Lab/AgentBridge releases and publishes a Linux desktop Flatpak
+# (engine + bundled Giraffe AI web client, WebKitGTK desktop window) to THIS repo's
+# GitHub Releases. No secrets are needed: the trigger is a public-API poll of the
+# upstream release, so a new AgentBridge release is picked up automatically (up to an
+# hour later, cron below) without any cross-repo token.
+#
+#   schedule          : poll upstream (hourly) — the automatic path
+#   workflow_dispatch : manual run; inputs.version = "latest" or an exact AgentBridge
+#                       tag (e.g. v1.26.09.08), inputs.force rebuilds an existing version
+#
+# One Flatpak bundle per release is published with a STABLE asset name
+# (agentbridge-linux-x86_64.flatpak), so
+# https://github.com/Graphene-Lab/AgentBridge-Linux/releases/latest/download/agentbridge-linux-x86_64.flatpak
+# always points at the newest build.
+
+name: Build and Publish Linux Flatpak
+
+on:
+  schedule:
+    # Hourly poll, off the round minutes to spread load.
+    - cron: '23 * * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "AgentBridge release tag to package (default: latest)"
+        required: false
+        default: latest
+      force:
+        description: Rebuild and republish even if this version is already released here
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-release
+  cancel-in-progress: false
+
+env:
+  APPID: io.github.graphene_lab.agentbridge
+  UPSTREAM: Graphene-Lab/AgentBridge
+  CLIENT_REPO: Graphene-Lab/GiraffeAI
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.res.outputs.version }}
+      do_build: ${{ steps.res.outputs.do_build }}
+      client_tag: ${{ steps.res.outputs.client_tag }}
+      client_version: ${{ steps.res.outputs.client_version }}
+      upstream_url: ${{ steps.res.outputs.upstream_url }}
+    steps:
+      - name: Resolve upstream version
+        id: res
+        shell: bash
+        run: |
+          UPSTREAM="${{ env.UPSTREAM }}"
+          CLIENT="${{ env.CLIENT_REPO }}"
+          TARGET="${{ inputs.version }}"
+          if [ -z "$TARGET" ] || [ "$TARGET" = "latest" ]; then
+            TARGET=$(gh api "repos/${UPSTREAM}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          fi
+          if [ -z "$TARGET" ]; then
+            echo "could not resolve an upstream AgentBridge release — nothing to do"
+            echo "do_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VER="${TARGET#v}"
+          echo "target=$TARGET version=$VER"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+          EXISTING=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ "$EXISTING" = "$TARGET" ] && [ "${{ inputs.force }}" != "true" ]; then
+            echo "already published $TARGET here — nothing to do"
+            echo "do_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "do_build=true" >> "$GITHUB_OUTPUT"
+
+          CTAG=$(gh api "repos/${CLIENT}/releases/latest" --jq .tag_name 2>/dev/null || echo v0)
+          CVER="${CTAG#v}"
+          echo "client_tag=$CTAG client_version=$CVER"
+          echo "client_tag=$CTAG" >> "$GITHUB_OUTPUT"
+          echo "client_version=$CVER" >> "$GITHUB_OUTPUT"
+          echo "upstream_url=https://github.com/${UPSTREAM}/releases/tag/${TARGET}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.do_build == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VER: ${{ needs.resolve.outputs.version }}
+      CVER: ${{ needs.resolve.outputs.client_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install icon tooling
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq librsvg2-bin
+
+      - name: Download engine archive + compute checksum
+        shell: bash
+        run: |
+          URL="https://github.com/${{ env.UPSTREAM }}/releases/download/v${VER}/agentbridge-linux-x64.tar.gz"
+          curl -fsSL -o agentbridge-linux-x64.tar.gz "$URL"
+          echo "SHA256=$(sha256sum agentbridge-linux-x64.tar.gz | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Download Giraffe AI web client + compute checksum
+        shell: bash
+        run: |
+          URL="https://github.com/${{ env.CLIENT_REPO }}/releases/download/v${CVER}/giraffeai-${CVER}.zip"
+          curl -fsSL -o giraffeai.zip "$URL"
+          echo "CLIENT_SHA256=$(sha256sum giraffeai.zip | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Render the flatpak manifest
+        shell: bash
+        run: |
+          python3 - "${{ github.workspace }}" <<'PY'
+          import pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          tpl = (root / "packaging" / "agentbridge.yml.tmpl").read_text()
+          out = tpl
+          out = out.replace("@@VERSION@@", __import__("os").environ["VER"])
+          out = out.replace("@@SHA256@@", __import__("os").environ["SHA256"])
+          out = out.replace("@@CLIENT_VERSION@@", __import__("os").environ["CVER"])
+          out = out.replace("@@CLIENT_SHA256@@", __import__("os").environ["CLIENT_SHA256"])
+          (root / "packaging" / "agentbridge.yml").write_text(out)
+          print("rendered packaging/agentbridge.yml")
+          PY
+
+      - name: Generate launcher icons (giraffe on brand gradient)
+        shell: bash
+        run: |
+          APPID="${{ env.APPID }}"
+          python3 - <<'PY'
+          import pathlib, re
+          src = pathlib.Path("packaging/branding/giraffe.svg").read_text()
+          m = re.search(r'<g[^>]*>.*?</g>', src, re.S)
+          if not m:
+              raise SystemExit("cannot find the giraffe group in giraffe.svg")
+          body = m.group(0)
+          svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+          <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#6c5ce7"/><stop offset="1" stop-color="#3b2f9e"/>
+          </linearGradient></defs>
+          <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+          <g fill="#ffffff"><g transform="translate(60 96) scale(0.98 0.98)">{body}</g></g>
+          </svg>'''
+          pathlib.Path("build-icon.svg").write_text(svg)
+          PY
+          for s in 64 128 256 512; do
+            mkdir -p "build-icons/icons/hicolor/${s}x${s}/apps"
+            rsvg-convert -w "$s" -h "$s" build-icon.svg \
+              -o "build-icons/icons/hicolor/${s}x${s}/apps/${APPID}.png"
+          done
+          ls -R build-icons | head -20
+
+      - name: Build Flatpak
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest: packaging/agentbridge.yml
+          arch: x86_64
+          cache-key: flatpak-${{ env.VER }}
+          repo: repo
+          bundle: agentbridge-linux-x86_64.flatpak
+          bundle-name: agentbridge-linux-x86_64
+          run-tests: false
+
+      - name: Smoke check (doctor inside the installed app)
+        shell: bash
+        continue-on-error: true
+        run: |
+          flatpak install -y --user --noninteractive ./agentbridge-linux-x86_64.flatpak
+          flatpak run --user --command=agent-desktop ${{ env.APPID }} --doctor
+          flatpak run --user --command=agent-run ${{ env.APPID }} --help >/dev/null 2>&1 || true
+
+      - name: Checksums
+        shell: bash
+        run: |
+          sha256sum agentbridge-linux-x86_64.flatpak | tee agentbridge-linux-x86_64.flatpak.sha256
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          TAG: v${{ env.VER }}
+          UPSTREAM_URL: ${{ needs.resolve.outputs.upstream_url }}
+        run: |
+          cat > release-notes.md <<EOF
+          **AgentBridge ${{ env.VER }} — Linux desktop (x86_64 Flatpak)**
+
+          Automatically built from the [AgentBridge ${{ env.TAG }}](${UPSTREAM_URL}) release:
+          the official linux-x64 archive (self-contained engine) plus the bundled
+          **Giraffe AI web client v${{ env.CVER }}** as the desktop GUI.
+
+          - Desktop entry "AgentBridge" opens the chat in its own window (WebKitGTK),
+            engine auto-started headless on localhost — a real desktop app with icon.
+          - "AgentBridge (Terminal)" runs the classic full-screen terminal UI.
+          - Engine version-pinned to this release (\`--no-update\`); a new Flatpak is
+            published automatically at every AgentBridge release.
+          - Release notes of the upstream engine: see [AgentBridge ${{ env.TAG }}](${UPSTREAM_URL}).
+
+          Install:
+          \`\`\`bash
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y ./agentbridge-linux-x86_64.flatpak
+          flatpak run ${{ env.APPID }}
+          \`\`\`
+          EOF
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "AgentBridge ${{ env.VER }} — Linux Flatpak (x86_64)" \
+            --notes-file release-notes.md \
+            agentbridge-linux-x86_64.flatpak \
+            agentbridge-linux-x86_64.flatpak.sha256

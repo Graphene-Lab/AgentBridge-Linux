@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AgentBridge (Terminal)
+GenericName=AI Personal Assistant — Terminal UI
+Comment=Run AgentBridge in a terminal: full-screen chat UI and local server
+Exec=agent-run
+Icon=io.github.graphene_lab.agentbridge
+Terminal=true
+Categories=Network;Utility;
+Keywords=AI;assistant;agent;chat;OpenAI;terminal;office;

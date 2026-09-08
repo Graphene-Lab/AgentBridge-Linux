@@ -158,7 +158,9 @@ printf '%s\\n' '{a.version}' > /app/lib/agentbridge/agentbridge-version.txt"""
                     f"install -Dm644 {APP_ID}.desktop /app/share/applications/{APP_ID}.desktop",
                     f"install -Dm644 {APP_ID}.Terminal.desktop /app/share/applications/{APP_ID}.Terminal.desktop",
                     f"install -Dm644 {APP_ID}.metainfo.xml /app/share/metainfo/{APP_ID}.metainfo.xml",
-                    "for s in 64 128 256 512; do install -Dm644 icons/hicolor/${s}x${s}/apps/"
+                    # dir sources copy their CONTENTS into the module root: the icons/
+                    # folder becomes hicolor/... (no icons/ prefix) — install from there.
+                    "for s in 64 128 256 512; do install -Dm644 hicolor/${s}x${s}/apps/"
                     + f"{APP_ID}.png /app/share/icons/hicolor/${{s}}x${{s}}/apps/{APP_ID}.png; done",
                 ],
             },

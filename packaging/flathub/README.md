@@ -47,8 +47,8 @@ packaging/flathub/
 
 ## Why these design choices (read before touching)
 
-- **Runtime `org.gnome.Platform//48`**: the WebKitGTK desktop GUI exists only in the
-  GNOME runtime (verified in the doctor smoke test).
+- **Runtime `org.gnome.Platform//50`**: the WebKitGTK desktop GUI exists only in the
+  GNOME runtime (verified in the doctor smoke test; 48 is EOL per the Flathub linter).
 - **Official .NET SDK tarball as a module source** instead of
   `org.freedesktop.Sdk.Extension.dotnet10`: the extension belongs to the freedesktop
   SDK, not the GNOME SDK — the tarball works with any runtime and keeps the SDK version
@@ -64,5 +64,7 @@ packaging/flathub/
 - **No aarch64 yet** (`flathub.json`): the arm64 SDK tarball would need a second pinned
   feed; add it when requested.
 
-Sandbox note: the finish-args are broad (home, network, audio, GPU) because AgentBridge
-is a self-hosted local assistant; justify this in the PR description.
+Sandbox note: the store submission uses the **narrowed** finish-args the Flathub linter
+requires (wayland + fallback-x11, xdg-documents/xdg-download only, no `--filesystem=home`,
+no explicit X11, no xdg-cache RW) — this differs from the self-hosted release bundle,
+which keeps the broader sandbox. Justify this difference in the PR description.

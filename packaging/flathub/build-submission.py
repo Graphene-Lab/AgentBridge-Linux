@@ -75,7 +75,6 @@ printf '%s\\n' '{a.version}' > /app/lib/agentbridge/agentbridge-version.txt"""
             "--device=dri",
             "--filesystem=xdg-documents",
             "--filesystem=xdg-download",
-            "--filesystem=xdg-cache",
             "--talk-name=org.freedesktop.Notifications",
             "--talk-name=org.freedesktop.secrets",
         ],

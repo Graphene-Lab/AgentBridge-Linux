@@ -66,7 +66,6 @@ jobs:
     outputs:
       version: ${{ steps.res.outputs.version }}
       do_build: ${{ steps.res.outputs.do_build }}
-      client_tag: ${{ steps.res.outputs.client_tag }}
       client_version: ${{ steps.res.outputs.client_version }}
       upstream_url: ${{ steps.res.outputs.upstream_url }}
     steps:
@@ -99,16 +98,29 @@ jobs:
           EXISTING="$(latest_tag "${GITHUB_REPOSITORY}")"
           echo "existing here: ${EXISTING:-none}"
           if [ "$EXISTING" = "$TARGET" ] && [ "${{ inputs.force }}" != "true" ]; then
-            echo "already published $TARGET here — nothing to do"
-            echo "do_build=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            # Skip only when the release carries BOTH architecture assets: a partial
+            # release (e.g. the aarch64 job failed after the x86_64 job published) must
+            # be completed by the next poll, not skipped forever because the tag exists.
+            EJ=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TARGET}" 2>/dev/null || true)
+            NAMES=$(printf '%s' "$EJ" | python3 -c "import sys,json; print(' '.join(a['name'] for a in (json.load(sys.stdin).get('assets') or [])))" 2>/dev/null || true)
+            MISSING=""
+            for want in agentbridge-linux-x86_64.flatpak agentbridge-linux-aarch64.flatpak; do
+              case " $NAMES " in
+                *" $want "*) : ;;
+                *) MISSING="$MISSING $want" ;;
+              esac
+            done
+            if [ -z "$MISSING" ]; then
+              echo "already published $TARGET here (both architectures) — nothing to do"
+              echo "do_build=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "release $TARGET exists but is missing:$MISSING — rebuilding to complete it"
           fi
           echo "do_build=true" >> "$GITHUB_OUTPUT"
 
           CTAG="$(latest_tag "$CLIENT")"
           CVER="${CTAG#v}"
-          echo "client_tag=$CTAG client_version=$CVER"
-          echo "client_tag=$CTAG" >> "$GITHUB_OUTPUT"
           echo "client_version=$CVER" >> "$GITHUB_OUTPUT"
           echo "upstream_url=https://github.com/${UPSTREAM}/releases/tag/${TARGET}" >> "$GITHUB_OUTPUT"
 

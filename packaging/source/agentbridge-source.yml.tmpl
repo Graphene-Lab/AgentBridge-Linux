@@ -43,6 +43,12 @@ modules:
         export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
         export DOTNET_CLI_HOME="$PWD/.dotnet" NUGET_PACKAGES="$PWD/.nuget"
         export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+        # Self-heal the offline feed layout: flatpak-builder should stage the nupkgs
+        # into ./nuget-sources (dest from nuget-sources.json); wherever it placed them,
+        # gather every .nupkg into the feed folder before restore.
+        mkdir -p nuget-sources
+        find . -maxdepth 3 -name '*.nupkg' -exec cp -n {} nuget-sources/ \; 2>/dev/null || true
+        echo "feed packages: $(find nuget-sources -name '*.nupkg' | wc -l)"
         dotnet publish AgentBridge.csproj -c Release -r linux-x64 \
           --self-contained true \
           -p:PublishSingleFile=true \

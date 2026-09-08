@@ -109,7 +109,7 @@ jobs:
             packaging/source/nuget-sources.json \
             "${{ env.STAGING }}/src/AgentBridge.csproj" \
             --runtime linux-x64
-          python3 -c "import json;print('packages:',len(json.load(open('packaging/source/nuget-sources.json'))))"
+          python3 -c "import json;d=json.load(open('packaging/source/nuget-sources.json'));print('packages:',len(d));print(json.dumps(d[0],indent=1)[:600])"
 
       - name: Stage payload (kokoro.onnx, Tools/, .playwright) from the release archive
         shell: bash

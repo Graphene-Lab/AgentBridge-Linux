@@ -104,6 +104,12 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.do_build == 'true'
     runs-on: ubuntu-latest
+    # The flatpak-builder action expects flatpak + flatpak-builder + the GNOME SDKs on
+    # the runner; the official flathub-infra image ships them all (gnome-48 matches the
+    # manifest runtime-version). --privileged is required for the flatpak sandbox.
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      options: --privileged
     env:
       VER: ${{ needs.resolve.outputs.version }}
       CVER: ${{ needs.resolve.outputs.client_version }}
@@ -114,10 +120,10 @@ jobs:
       - name: Install build tooling
         shell: bash
         run: |
-          sudo apt-get update -qq
+          apt-get update -qq
           # librsvg2-bin: icon rendering; xvfb: the flatpak-builder action runs the
-          # builder under xvfb-run (not preinstalled on the ubuntu-24.04 image).
-          sudo apt-get install -y -qq librsvg2-bin xvfb
+          # builder under xvfb-run.
+          apt-get install -y -qq librsvg2-bin xvfb
 
       - name: Download engine archive + compute checksum
         shell: bash
@@ -176,9 +182,6 @@ jobs:
           done
           ls -R build-icons | head -20
 
-      - name: Install Flatpak + flatpak-builder
-        uses: flatpak/flatpak-github-actions/flatpak-install@v6
-
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
@@ -209,6 +212,7 @@ jobs:
           TAG: v${{ env.VER }}
           UPSTREAM_URL: ${{ needs.resolve.outputs.upstream_url }}
         run: |
+          # Release notes
           cat > release-notes.md <<EOF
           **AgentBridge ${{ env.VER }} — Linux desktop (x86_64 Flatpak)**
 
@@ -230,9 +234,36 @@ jobs:
           flatpak run ${{ env.APPID }}
           \`\`\`
           EOF
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "AgentBridge ${{ env.VER }} — Linux Flatpak (x86_64)" \
-            --notes-file release-notes.md \
-            agentbridge-linux-x86_64.flatpak \
-            agentbridge-linux-x86_64.flatpak.sha256
+          # The build runs in the flathub-infra container, which has no gh CLI — create the
+          # release and upload the assets through the REST API with the workflow token
+          # (repo-scoped: fine for THIS repo).
+          python3 - "$TAG" <<'PY' > release-payload.json
+          import json, pathlib, sys
+          body = pathlib.Path("release-notes.md").read_text()
+          payload = {
+              "tag_name": sys.argv[1],
+              "name": f"AgentBridge {sys.argv[1][1:]} — Linux Flatpak (x86_64)",
+              "body": body,
+          }
+          print(json.dumps(payload))
+          PY
+          RESP=$(curl -fsS -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" \
+            --data-binary @release-payload.json) || true
+          if [ -z "$RESP" ]; then
+            # Tag/release already exists (manual re-run of the same version): reuse it.
+            RESP=$(curl -fsS -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")
+          fi
+          echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])' > release-id.txt
+          UPLOAD=$(echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["upload_url"].split("{")[0])')
+          for f in agentbridge-linux-x86_64.flatpak agentbridge-linux-x86_64.flatpak.sha256; do
+            curl -fsS -X POST \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$f" \
+              "${UPLOAD}?name=${f}"
+          done
+          echo "published ${TAG} → https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"

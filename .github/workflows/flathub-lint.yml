@@ -26,3 +26,48 @@ jobs:
         run: |
           flatpak-builder-lint appstream \
             packaging/flathub/io.github.graphene_lab.agentbridge/branding/io.github.graphene_lab.agentbridge.metainfo.xml || true
+
+  # Builds the EXACT drop-in manifest that is submitted to Flathub (runtime GNOME 50,
+  # inline NuGet feed, kokoro via URL source) with flatpak-builder — the only thing the
+  # Flathub review bot will do that our other workflows did not already run on this file.
+  build-dropin:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install flatpak toolchain + GNOME 50 runtime/SDK
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak flatpak-builder
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y --noninteractive flathub \
+            org.gnome.Platform//50 org.gnome.Sdk//50
+
+      - name: Build the drop-in manifest (flatpak-builder)
+        shell: bash
+        run: |
+          sudo flatpak-builder \
+            --force-clean \
+            --disable-rofiles-fuse \
+            --repo=repo-dropin \
+            .build-dropin \
+            packaging/flathub/io.github.graphene_lab.agentbridge/io.github.graphene_lab.agentbridge.yml
+          sudo flatpak build-bundle \
+            --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
+            repo-dropin \
+            agentbridge-dropin-proof.flatpak \
+            io.github.graphene_lab.agentbridge \
+            master
+          ls -lh agentbridge-dropin-proof.flatpak
+          sha256sum agentbridge-dropin-proof.flatpak
+
+      - name: Smoke check (install + doctor)
+        shell: bash
+        continue-on-error: true
+        run: |
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          flatpak install --user -y --noninteractive ./agentbridge-dropin-proof.flatpak
+          flatpak run --user --command=agent-desktop io.github.graphene_lab.agentbridge --doctor

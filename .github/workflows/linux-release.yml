@@ -41,6 +41,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # gh CLI in Actions does not always pick up GITHUB_TOKEN automatically; export it
+  # under gh's own variable so every gh call in this workflow is authenticated.
+  GH_TOKEN: ${{ github.token }}
   APPID: io.github.graphene_lab.agentbridge
   UPSTREAM: Graphene-Lab/AgentBridge
   CLIENT_REPO: Graphene-Lab/GiraffeAI
@@ -61,9 +64,17 @@ jobs:
         run: |
           UPSTREAM="${{ env.UPSTREAM }}"
           CLIENT="${{ env.CLIENT_REPO }}"
+          # Read public release info via authenticated curl (robust on runners where the
+          # gh CLI may not be logged in). GITHUB_TOKEN is always provided by Actions.
+          latest_tag() {
+            curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin).get("tag_name") or "")' 2>/dev/null \
+              || true
+          }
           TARGET="${{ inputs.version }}"
           if [ -z "$TARGET" ] || [ "$TARGET" = "latest" ]; then
-            TARGET=$(gh api "repos/${UPSTREAM}/releases/latest" --jq .tag_name 2>/dev/null || true)
+            TARGET="$(latest_tag "$UPSTREAM")"
           fi
           if [ -z "$TARGET" ]; then
             echo "could not resolve an upstream AgentBridge release — nothing to do"
@@ -74,7 +85,8 @@ jobs:
           echo "target=$TARGET version=$VER"
           echo "version=$VER" >> "$GITHUB_OUTPUT"
 
-          EXISTING=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          EXISTING="$(latest_tag "${GITHUB_REPOSITORY}")"
+          echo "existing here: ${EXISTING:-none}"
           if [ "$EXISTING" = "$TARGET" ] && [ "${{ inputs.force }}" != "true" ]; then
             echo "already published $TARGET here — nothing to do"
             echo "do_build=false" >> "$GITHUB_OUTPUT"
@@ -82,7 +94,7 @@ jobs:
           fi
           echo "do_build=true" >> "$GITHUB_OUTPUT"
 
-          CTAG=$(gh api "repos/${CLIENT}/releases/latest" --jq .tag_name 2>/dev/null || echo v0)
+          CTAG="$(latest_tag "$CLIENT")"
           CVER="${CTAG#v}"
           echo "client_tag=$CTAG client_version=$CVER"
           echo "client_tag=$CTAG" >> "$GITHUB_OUTPUT"

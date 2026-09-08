@@ -65,10 +65,10 @@ modules:
         dest: dotnet-sdk
         only-arches:
           - x86_64
-      # Local feed descriptor: the workflow generates this next to the manifest
-      # (flatpak-dotnet-generator). flatpak-builder expands it and pre-downloads every
-      # nupkg into ./nuget-sources of this module — restore stays fully offline.
-      - nuget-sources.json
+      # The workflow render step merges the flatpak-dotnet-generator output
+      # (packaging/source/nuget-sources.json — one "file" source per nupkg, all into
+      # ./nuget-sources) into THIS module's sources list, so flatpak-builder
+      # pre-downloads the whole offline feed before the build.
       # Seed kokoro.onnx at the repo root: the csproj target copies it instead of
       # curling (build commands have no network).
       - type: file

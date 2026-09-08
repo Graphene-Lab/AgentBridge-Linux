@@ -154,17 +154,28 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import pathlib, os
+          import json, pathlib, os, yaml
           root = pathlib.Path(".").resolve()
-          tpl = (root / "packaging" / "source" / "agentbridge-source.yml.tmpl").read_text()
-          out = tpl
-          out = out.replace("@@VERSION@@", os.environ["VER"])
-          out = out.replace("@@COMMIT@@", os.environ["COMMIT"])
-          out = out.replace("@@SDK_SHA256@@", os.environ["SDK_SHA256"])
-          out = out.replace("@@CLIENT_VERSION@@", os.environ["CVER"])
-          out = out.replace("@@CLIENT_SHA256@@", os.environ["CLIENT_SHA256"])
-          (root / "packaging" / "source" / "agentbridge.yml").write_text(out)
-          print("rendered packaging/source/agentbridge.yml")
+          raw = (root / "packaging" / "source" / "agentbridge-source.yml.tmpl").read_text()
+          for key, value in {
+              "@@VERSION@@": os.environ["VER"],
+              "@@COMMIT@@": os.environ["COMMIT"],
+              "@@SDK_SHA256@@": os.environ["SDK_SHA256"],
+              "@@CLIENT_VERSION@@": os.environ["CVER"],
+              "@@CLIENT_SHA256@@": os.environ["CLIENT_SHA256"],
+          }.items():
+              raw = raw.replace(key, value)
+          doc = yaml.safe_load(raw)
+          # flatpak-builder 1.2 cannot expand a nested sources .json: merge the
+          # generator output (one "file" source per nupkg) directly into the module.
+          nuget = json.loads((root / "packaging" / "source" / "nuget-sources.json").read_text())
+          engine = next(m for m in doc["modules"] if m["name"] == "agentbridge-source")
+          engine["sources"].extend(nuget)
+          (root / "packaging" / "source" / "agentbridge.yml").write_text(
+              yaml.safe_dump(doc, sort_keys=False, default_flow_style=False, width=1000000)
+          )
+          print("rendered packaging/source/agentbridge.yml with",
+                len(nuget), "nuget sources merged")
           PY
 
       - name: Add Flathub remote + install GNOME runtime/SDK (x86_64)

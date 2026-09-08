@@ -144,15 +144,17 @@ jobs:
       - name: Render the flatpak manifest
         shell: bash
         run: |
-          python3 - "${{ github.workspace }}" <<'PY'
-          import pathlib, sys
-          root = pathlib.Path(sys.argv[1])
+          # Relative paths only: in a container job ${{ github.workspace }} is the HOST
+          # path (/home/runner/...) while the checkout lives at the container's mount.
+          python3 - <<'PY'
+          import pathlib, os
+          root = pathlib.Path(".").resolve()
           tpl = (root / "packaging" / "agentbridge.yml.tmpl").read_text()
           out = tpl
-          out = out.replace("@@VERSION@@", __import__("os").environ["VER"])
-          out = out.replace("@@SHA256@@", __import__("os").environ["SHA256"])
-          out = out.replace("@@CLIENT_VERSION@@", __import__("os").environ["CVER"])
-          out = out.replace("@@CLIENT_SHA256@@", __import__("os").environ["CLIENT_SHA256"])
+          out = out.replace("@@VERSION@@", os.environ["VER"])
+          out = out.replace("@@SHA256@@", os.environ["SHA256"])
+          out = out.replace("@@CLIENT_VERSION@@", os.environ["CVER"])
+          out = out.replace("@@CLIENT_SHA256@@", os.environ["CLIENT_SHA256"])
           (root / "packaging" / "agentbridge.yml").write_text(out)
           print("rendered packaging/agentbridge.yml")
           PY

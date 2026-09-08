@@ -60,9 +60,14 @@ Requirements: [Flatpak](https://flatpak.org/setup/) with the **Flathub** remote
 # one time: add the Flathub remote (needed for the shared runtime)
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
-# download + install the latest desktop bundle
+# download + install the latest desktop bundle — x86_64 (Intel/AMD), or the
+# aarch64 link below on ARM64 (Raspberry Pi 4/5, Apple-silicon Asahi, …)
 flatpak install --user -y \
   https://github.com/Graphene-Lab/AgentBridge-Linux/releases/latest/download/agentbridge-linux-x86_64.flatpak
+
+# ARM64:
+# flatpak install --user -y \
+#   https://github.com/Graphene-Lab/AgentBridge-Linux/releases/latest/download/agentbridge-linux-aarch64.flatpak
 ```
 
 Launch it from your desktop environment (icon **AgentBridge**) or from the terminal:
@@ -72,7 +77,8 @@ flatpak run io.github.graphene_lab.agentbridge
 ```
 
 **Update** — a new release appears here automatically at each AgentBridge release;
-re-install with the same command (or `--reinstall`) to pick it up:
+re-install with the same command (or `--reinstall`) to pick it up (use the `-aarch64`
+asset URL on ARM64):
 
 ```bash
 flatpak install --user -y --reinstall \
@@ -87,7 +93,7 @@ flatpak install --user -y --reinstall \
 | **AgentBridge (Terminal)** | The classic full-screen terminal UI (TUI) + local server, in a terminal |
 
 The bundled client is the latest **Giraffe AI** release at build time; the engine is the
-official self-contained AgentBridge **linux-x64** release of the same build.
+official self-contained AgentBridge **linux-x64 / linux-arm64** release of the same build.
 
 ## First start
 

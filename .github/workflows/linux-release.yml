@@ -1,6 +1,6 @@
-# AgentBridge Linux — automatic Flatpak publication.
+# AgentBridge Linux — automatic Flatpak publication (x86_64 + aarch64).
 #
-# Watches Graphene-Lab/AgentBridge releases and publishes a Linux desktop Flatpak
+# Watches Graphene-Lab/AgentBridge releases and publishes Linux desktop Flatpaks
 # (engine + bundled Giraffe AI web client, WebKitGTK desktop window) to THIS repo's
 # GitHub Releases. No secrets are needed: the trigger is a public-API poll of the
 # upstream release, so a new AgentBridge release is picked up automatically (up to an
@@ -10,10 +10,19 @@
 #   workflow_dispatch : manual run; inputs.version = "latest" or an exact AgentBridge
 #                       tag (e.g. v1.26.09.08), inputs.force rebuilds an existing version
 #
-# One Flatpak bundle per release is published with a STABLE asset name
-# (agentbridge-linux-x86_64.flatpak), so
-# https://github.com/Graphene-Lab/AgentBridge-Linux/releases/latest/download/agentbridge-linux-x86_64.flatpak
-# always points at the newest build.
+# Jobs:
+#   resolve         → decides whether a new upstream version must be built
+#   build           → x86_64 Flatpak in the official flathub-infra container (has
+#                     flatpak/flatpak-builder/rsvg + GNOME SDKs preinstalled); creates
+#                     the GitHub Release and uploads the x86_64 assets
+#   build-aarch64   → aarch64 Flatpak on a host runner (flatpak via apt + qemu-user for
+#                     the foreign arch); appends its assets to the same release (runs
+#                     after build so the release already exists)
+#
+# Stable asset names per architecture, so
+#   .../releases/latest/download/agentbridge-linux-x86_64.flatpak
+#   .../releases/latest/download/agentbridge-linux-aarch64.flatpak
+# always point at the newest builds.
 
 name: Build and Publish Linux Flatpak
 
@@ -47,6 +56,9 @@ env:
   APPID: io.github.graphene_lab.agentbridge
   UPSTREAM: Graphene-Lab/AgentBridge
   CLIENT_REPO: Graphene-Lab/GiraffeAI
+  # Must match runtime-version in packaging/agentbridge.yml.tmpl.
+  GNOME_RUNTIME: org.gnome.Platform//48
+  GNOME_SDK: org.gnome.Sdk//48
 
 jobs:
   resolve:
@@ -100,6 +112,10 @@ jobs:
           echo "client_version=$CVER" >> "$GITHUB_OUTPUT"
           echo "upstream_url=https://github.com/${UPSTREAM}/releases/tag/${TARGET}" >> "$GITHUB_OUTPUT"
 
+  # Shared snippet (inlined in both build jobs): read the sha256 digests GitHub computed
+  # for the engine release archives (x86_64 + arm64) straight from the release API, so
+  # neither job downloads the ~400 MB archive twice — flatpak-builder fetches it itself
+  # from the URL embedded in the rendered manifest.
   build:
     needs: resolve
     if: needs.resolve.outputs.do_build == 'true'
@@ -121,18 +137,28 @@ jobs:
         shell: bash
         run: |
           echo "--- /etc/os-release ---"; cat /etc/os-release 2>/dev/null || true
-          echo "--- whoami ---"; id
           echo "--- tools ---"
           for t in python3 curl rsvg-convert xvfb-run flatpak flatpak-builder unzip git; do
             command -v "$t" >/dev/null 2>&1 && echo "$t: OK ($(command -v $t))" || echo "$t: MISSING"
           done
 
-      - name: Download engine archive + compute checksum
+      - name: Fetch engine archive checksums (GitHub asset digests)
         shell: bash
         run: |
-          URL="https://github.com/${{ env.UPSTREAM }}/releases/download/v${VER}/agentbridge-linux-x64.tar.gz"
-          curl -fsSL -o agentbridge-linux-x64.tar.gz "$URL"
-          echo "SHA256=$(sha256sum agentbridge-linux-x64.tar.gz | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          VER="${{ env.VER }}"
+          AJSON=$(curl -fsSL "https://api.github.com/repos/${{ env.UPSTREAM }}/releases/tags/v${VER}") || true
+          if [ -z "$AJSON" ]; then
+            echo "::error::cannot read upstream release metadata for v${VER}"
+            exit 1
+          fi
+          SHA_X64=$(printf '%s' "$AJSON" | python3 -c "import sys,json; print(next((a['digest'].split(':',1)[1] for a in json.load(sys.stdin).get('assets',[]) if a['name']=='agentbridge-linux-x64.tar.gz'), ''))")
+          SHA_ARM=$(printf '%s' "$AJSON" | python3 -c "import sys,json; print(next((a['digest'].split(':',1)[1] for a in json.load(sys.stdin).get('assets',[]) if a['name']=='agentbridge-linux-arm64.tar.gz'), ''))")
+          if [ -z "$SHA_X64" ] || [ -z "$SHA_ARM" ]; then
+            echo "::error::engine archive digests missing on the upstream release"
+            exit 1
+          fi
+          echo "SHA256_X86_64=$SHA_X64" >> "$GITHUB_ENV"
+          echo "SHA256_AARCH64=$SHA_ARM" >> "$GITHUB_ENV"
 
       - name: Download Giraffe AI web client + compute checksum
         shell: bash
@@ -152,7 +178,8 @@ jobs:
           tpl = (root / "packaging" / "agentbridge.yml.tmpl").read_text()
           out = tpl
           out = out.replace("@@VERSION@@", os.environ["VER"])
-          out = out.replace("@@SHA256@@", os.environ["SHA256"])
+          out = out.replace("@@SHA256_X86_64@@", os.environ["SHA256_X86_64"])
+          out = out.replace("@@SHA256_AARCH64@@", os.environ["SHA256_AARCH64"])
           out = out.replace("@@CLIENT_VERSION@@", os.environ["CVER"])
           out = out.replace("@@CLIENT_SHA256@@", os.environ["CLIENT_SHA256"])
           (root / "packaging" / "agentbridge.yml").write_text(out)
@@ -184,14 +211,13 @@ jobs:
             rsvg-convert -w "$s" -h "$s" build-icon.svg \
               -o "build-icons/icons/hicolor/${s}x${s}/apps/${APPID}.png"
           done
-          ls -R build-icons | head -20
 
-      - name: Build Flatpak
+      - name: Build Flatpak (x86_64)
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: packaging/agentbridge.yml
           arch: x86_64
-          cache-key: flatpak-${{ env.VER }}
+          cache-key: flatpak-x86_64-${{ env.VER }}
           bundle: agentbridge-linux-x86_64.flatpak
           repo-dir: repo
           run-tests: false
@@ -205,12 +231,12 @@ jobs:
           flatpak run --user --command=agent-desktop ${{ env.APPID }} --doctor
           flatpak run --user --command=agent-run ${{ env.APPID }} --help >/dev/null 2>&1 || true
 
-      - name: Checksums
+      - name: Checksums (x86_64)
         shell: bash
         run: |
           sha256sum agentbridge-linux-x86_64.flatpak | tee agentbridge-linux-x86_64.flatpak.sha256
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release + upload x86_64 assets
         shell: bash
         env:
           TAG: v${{ env.VER }}
@@ -218,10 +244,10 @@ jobs:
         run: |
           # Release notes
           cat > release-notes.md <<EOF
-          **AgentBridge ${{ env.VER }} — Linux desktop (x86_64 Flatpak)**
+          **AgentBridge ${{ env.VER }} — Linux desktop Flatpak (x86_64 & aarch64)**
 
           Automatically built from the [AgentBridge ${{ env.TAG }}](${UPSTREAM_URL}) release:
-          the official linux-x64 archive (self-contained engine) plus the bundled
+          the official linux archives (self-contained engine) plus the bundled
           **Giraffe AI web client v${{ env.CVER }}** as the desktop GUI.
 
           - Desktop entry "AgentBridge" opens the chat in its own window (WebKitGTK),
@@ -231,10 +257,14 @@ jobs:
             published automatically at every AgentBridge release.
           - Release notes of the upstream engine: see [AgentBridge ${{ env.TAG }}](${UPSTREAM_URL}).
 
+          Assets (stable per-arch names, one per architecture):
+          - \`agentbridge-linux-x86_64.flatpak\` (Intel/AMD 64-bit)
+          - \`agentbridge-linux-aarch64.flatpak\` (ARM64 — added by the aarch64 job)
+
           Install:
           \`\`\`bash
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y ./agentbridge-linux-x86_64.flatpak
+          flatpak install --user -y ./agentbridge-linux-x86_64.flatpak   # or -aarch64
           flatpak run ${{ env.APPID }}
           \`\`\`
           EOF
@@ -246,7 +276,7 @@ jobs:
           body = pathlib.Path("release-notes.md").read_text()
           payload = {
               "tag_name": sys.argv[1],
-              "name": f"AgentBridge {sys.argv[1][1:]} — Linux Flatpak (x86_64)",
+              "name": f"AgentBridge {sys.argv[1][1:]} — Linux Flatpak (x86_64 & aarch64)",
               "body": body,
           }
           print(json.dumps(payload))
@@ -261,7 +291,6 @@ jobs:
             RESP=$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")
           fi
-          echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])' > release-id.txt
           UPLOAD=$(echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["upload_url"].split("{")[0])')
           for f in agentbridge-linux-x86_64.flatpak agentbridge-linux-x86_64.flatpak.sha256; do
             # Re-publishing the same version (force): the release already exists and its
@@ -278,3 +307,157 @@ jobs:
               "${UPLOAD}?name=${f}" >/dev/null
           done
           echo "published ${TAG} → https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+  # aarch64 build: the flathub-infra container ships only x86_64 runtimes, so this job
+  # runs on a plain ubuntu host — flatpak via apt, qemu-user-static (registered with
+  # docker/setup-qemu-action) executes the aarch64 sandbox. Runs AFTER build so the
+  # GitHub Release already exists and the aarch64 assets are simply appended.
+  build-aarch64:
+    needs: [resolve, build]
+    if: needs.resolve.outputs.do_build == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VER: ${{ needs.resolve.outputs.version }}
+      CVER: ${{ needs.resolve.outputs.client_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install flatpak toolchain
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak flatpak-builder librsvg2-bin
+
+      - name: Register qemu-user (aarch64 binfmt)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Add Flathub remote + install aarch64 runtimes
+        shell: bash
+        run: |
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y --noninteractive --arch=aarch64 flathub \
+            ${{ env.GNOME_RUNTIME }} ${{ env.GNOME_SDK }}
+
+      - name: Fetch engine archive checksums (GitHub asset digests)
+        shell: bash
+        run: |
+          VER="${{ env.VER }}"
+          AJSON=$(curl -fsSL "https://api.github.com/repos/${{ env.UPSTREAM }}/releases/tags/v${VER}") || true
+          if [ -z "$AJSON" ]; then
+            echo "::error::cannot read upstream release metadata for v${VER}"
+            exit 1
+          fi
+          SHA_X64=$(printf '%s' "$AJSON" | python3 -c "import sys,json; print(next((a['digest'].split(':',1)[1] for a in json.load(sys.stdin).get('assets',[]) if a['name']=='agentbridge-linux-x64.tar.gz'), ''))")
+          SHA_ARM=$(printf '%s' "$AJSON" | python3 -c "import sys,json; print(next((a['digest'].split(':',1)[1] for a in json.load(sys.stdin).get('assets',[]) if a['name']=='agentbridge-linux-arm64.tar.gz'), ''))")
+          if [ -z "$SHA_X64" ] || [ -z "$SHA_ARM" ]; then
+            echo "::error::engine archive digests missing on the upstream release"
+            exit 1
+          fi
+          echo "SHA256_X86_64=$SHA_X64" >> "$GITHUB_ENV"
+          echo "SHA256_AARCH64=$SHA_ARM" >> "$GITHUB_ENV"
+
+      - name: Download Giraffe AI web client + compute checksum
+        shell: bash
+        run: |
+          URL="https://github.com/${{ env.CLIENT_REPO }}/releases/download/v${CVER}/giraffeai-${CVER}.zip"
+          curl -fsSL -o giraffeai.zip "$URL"
+          echo "CLIENT_SHA256=$(sha256sum giraffeai.zip | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Render the flatpak manifest
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, os
+          root = pathlib.Path(".").resolve()
+          tpl = (root / "packaging" / "agentbridge.yml.tmpl").read_text()
+          out = tpl
+          out = out.replace("@@VERSION@@", os.environ["VER"])
+          out = out.replace("@@SHA256_X86_64@@", os.environ["SHA256_X86_64"])
+          out = out.replace("@@SHA256_AARCH64@@", os.environ["SHA256_AARCH64"])
+          out = out.replace("@@CLIENT_VERSION@@", os.environ["CVER"])
+          out = out.replace("@@CLIENT_SHA256@@", os.environ["CLIENT_SHA256"])
+          (root / "packaging" / "agentbridge.yml").write_text(out)
+          print("rendered packaging/agentbridge.yml")
+          PY
+
+      - name: Generate launcher icons (giraffe on brand gradient)
+        shell: bash
+        run: |
+          APPID="${{ env.APPID }}"
+          python3 - <<'PY'
+          import pathlib, re
+          src = pathlib.Path("packaging/branding/giraffe.svg").read_text()
+          m = re.search(r'<g[^>]*>.*?</g>', src, re.S)
+          if not m:
+              raise SystemExit("cannot find the giraffe group in giraffe.svg")
+          body = m.group(0)
+          svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+          <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#6c5ce7"/><stop offset="1" stop-color="#3b2f9e"/>
+          </linearGradient></defs>
+          <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+          <g fill="#ffffff"><g transform="translate(60 96) scale(0.98 0.98)">{body}</g></g>
+          </svg>'''
+          pathlib.Path("build-icon.svg").write_text(svg)
+          PY
+          for s in 64 128 256 512; do
+            mkdir -p "build-icons/icons/hicolor/${s}x${s}/apps"
+            rsvg-convert -w "$s" -h "$s" build-icon.svg \
+              -o "build-icons/icons/hicolor/${s}x${s}/apps/${APPID}.png"
+          done
+
+      - name: Build Flatpak (aarch64)
+        shell: bash
+        run: |
+          # Cross-arch build: flatpak-builder runs the manifest's build commands inside the
+          # aarch64 runtime via the registered qemu-user. No GUI smoke test here (running
+          # the GTK app under emulation is slow); the x86_64 job covers component checks.
+          sudo flatpak-builder \
+            --force-clean \
+            --disable-rofiles-fuse \
+            --arch=aarch64 \
+            --repo=repo-aarch64 \
+            .flatpak-build-aarch64 \
+            packaging/agentbridge.yml
+          sudo flatpak build-bundle \
+            --arch=aarch64 \
+            --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
+            repo-aarch64 \
+            agentbridge-linux-aarch64.flatpak \
+            ${{ env.APPID }} \
+            master
+          ls -lh agentbridge-linux-aarch64.flatpak
+
+      - name: Checksums (aarch64)
+        shell: bash
+        run: |
+          sha256sum agentbridge-linux-aarch64.flatpak | tee agentbridge-linux-aarch64.flatpak.sha256
+
+      - name: Append aarch64 assets to the GitHub Release
+        shell: bash
+        env:
+          TAG: v${{ env.VER }}
+        run: |
+          # The release was created by the x86_64 job (build runs before this job).
+          RESP=$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}") || {
+            echo "::error::release ${TAG} not found — the x86_64 job must run first"
+            exit 1
+          }
+          UPLOAD=$(echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["upload_url"].split("{")[0])')
+          for f in agentbridge-linux-aarch64.flatpak agentbridge-linux-aarch64.flatpak.sha256; do
+            EXISTING=$(echo "$RESP" | python3 -c "import sys,json; rel=json.load(sys.stdin); print(next((str(a['id']) for a in rel.get('assets', []) if a['name'] == sys.argv[1]), ''))" "$f")
+            if [ -n "$EXISTING" ]; then
+              curl -fsS -X DELETE -H "Authorization: Bearer ${GH_TOKEN}" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${EXISTING}" || true
+            fi
+            curl -fsS -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$f" \
+              "${UPLOAD}?name=${f}" >/dev/null
+          done
+          echo "aarch64 assets published to ${TAG}"

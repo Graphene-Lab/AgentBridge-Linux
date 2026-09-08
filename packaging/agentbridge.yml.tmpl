@@ -47,9 +47,10 @@ finish-args:
 
 modules:
   # ── Engine payload ────────────────────────────────────────────────────────────
-  # The release archive has NO wrapping top-level directory (the AgentBridge CI tars the
-  # publish/ output), hence strip-components: 0. Self-contained single-file: no .NET SDK
-  # needed at build or on the client.
+  # The release archives have NO wrapping top-level directory (the AgentBridge CI tars
+  # the publish/ output), hence strip-components: 0. Self-contained single-file: no .NET
+  # SDK needed at build or on the client. Each build fetches the archive for its own
+  # architecture only (only-arches); the other entry is skipped by flatpak-builder.
   - name: agentbridge-engine
     buildsystem: simple
     build-commands:
@@ -59,10 +60,16 @@ modules:
     sources:
       - type: archive
         url: https://github.com/Graphene-Lab/AgentBridge/releases/download/v@@VERSION@@/agentbridge-linux-x64.tar.gz
-        sha256: "@@SHA256@@"
+        sha256: "@@SHA256_X86_64@@"
         strip-components: 0
         only-arches:
           - x86_64
+      - type: archive
+        url: https://github.com/Graphene-Lab/AgentBridge/releases/download/v@@VERSION@@/agentbridge-linux-arm64.tar.gz
+        sha256: "@@SHA256_AARCH64@@"
+        strip-components: 0
+        only-arches:
+          - aarch64
 
   # ── Giraffe AI web client (the desktop GUI) ──────────────────────────────────
   # The engine normally downloads this client at first startup from the GiraffeAI GitHub

@@ -12,18 +12,22 @@ publishes the resulting Flatpak.
 `workflow_dispatch`. It compares the latest `Graphene-Lab/AgentBridge` release tag with
 this repo's latest release tag; when a new upstream version exists it:
 
-1. downloads `agentbridge-linux-x64.tar.gz` for that tag,
+1. reads the engine archive **sha256 digests** for BOTH architectures straight from the
+   release API (no ~400 MB double downloads — flatpak-builder fetches the archive itself),
 2. downloads the latest GiraffeAI web-client zip,
 3. renders `packaging/agentbridge.yml` from `packaging/agentbridge.yml.tmpl`
-   (placeholders `@@VERSION@@ @@SHA256@@ @@CLIENT_VERSION@@ @@CLIENT_SHA256@@`),
+   (placeholders `@@VERSION@@ @@SHA256_X86_64@@ @@SHA256_AARCH64@@ @@CLIENT_VERSION@@
+   @@CLIENT_SHA256@@`),
 4. generates launcher icons from `packaging/branding/giraffe.svg`,
-5. builds the Flatpak (org.gnome.Platform//48) with `flatpak/flatpak-github-actions`,
-6. smoke-checks the installed app with `agent-desktop --doctor`,
-7. creates a GitHub Release here with the stable asset name
-   `agentbridge-linux-x86_64.flatpak` + `.sha256`.
+5. **x86_64**: builds the Flatpak in the `ghcr.io/flathub-infra/...:gnome-48` container,
+   smoke-checks with `agent-desktop --doctor`, creates the GitHub Release and uploads the
+   x86_64 assets,
+6. **aarch64** (separate host job, qemu-user + apt flatpak): appends the aarch64 bundle to
+   the same release after the x86_64 job.
 
-No secrets. No changes to the upstream AgentBridge repo are needed (its release.ps1 /
-release.yml are untouched).
+Stable asset names: `agentbridge-linux-x86_64.flatpak` / `agentbridge-linux-aarch64.flatpak`
+(+ `.sha256` each). No secrets. No changes to the upstream AgentBridge repo are needed
+(its release.ps1 / release.yml are untouched).
 
 ## Packaging model — read this before touching the manifest
 

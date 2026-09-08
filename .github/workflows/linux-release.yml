@@ -64,23 +64,16 @@ jobs:
         run: |
           UPSTREAM="${{ env.UPSTREAM }}"
           CLIENT="${{ env.CLIENT_REPO }}"
-          # Read public release info via authenticated curl (robust on runners where the
-          # gh CLI may not be logged in). GITHUB_TOKEN is always provided by Actions.
+          # Read public release info anonymously: the workflow GITHUB_TOKEN only covers
+          # THIS repo, and sending it to another repo's public endpoint returns 404.
           latest_tag() {
-            curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-              "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
+            curl -fsSL "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
               | python3 -c 'import sys,json; print(json.load(sys.stdin).get("tag_name") or "")' 2>/dev/null \
               || true
           }
           TARGET="${{ inputs.version }}"
           if [ -z "$TARGET" ] || [ "$TARGET" = "latest" ]; then
             TARGET="$(latest_tag "$UPSTREAM")"
-            if [ -z "$TARGET" ]; then
-              echo "::error::cannot read the latest release of ${UPSTREAM} (curl auth+anonymous failed)"
-              curl -sS -w '\nHTTP %{http_code}\n' "https://api.github.com/repos/${UPSTREAM}/releases/latest" | tail -5
-              echo "do_build=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
           fi
           if [ -z "$TARGET" ]; then
             echo "could not resolve an upstream AgentBridge release — nothing to do"

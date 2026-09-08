@@ -111,11 +111,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install icon tooling
+      - name: Install build tooling
         shell: bash
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq librsvg2-bin
+          # librsvg2-bin: icon rendering; xvfb: the flatpak-builder action runs the
+          # builder under xvfb-run (not preinstalled on the ubuntu-24.04 image).
+          sudo apt-get install -y -qq librsvg2-bin xvfb
 
       - name: Download engine archive + compute checksum
         shell: bash

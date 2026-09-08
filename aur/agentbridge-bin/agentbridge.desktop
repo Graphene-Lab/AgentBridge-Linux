@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AgentBridge
+GenericName=AI Personal Assistant
+Comment=Self-hosted AI assistant: full-screen terminal chat UI and local OpenAI-compatible server
+Exec=agentbridge
+Icon=agentbridge
+Terminal=true
+Categories=Network;Utility;
+Keywords=AI;assistant;agent;chat;OpenAI;terminal;office;

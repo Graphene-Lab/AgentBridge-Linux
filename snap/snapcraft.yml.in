@@ -1,0 +1,35 @@
+name: agentbridge
+base: core24
+version: @@VERSION@@
+summary: Self-hosted AI personal assistant
+description: |
+  AgentBridge is a self-hosted AI personal assistant (AGPL-3.0). It runs its own agents
+  behind two interfaces in a single process: a full-screen chat terminal (TUI) and an
+  HTTP API speaking the standard OpenAI protocol. Chat in the terminal while scripts,
+  bots and apps use the same agents on the same port.
+
+  This classic-confinement snap ships the official self-contained release archive. The
+  engine's user configuration (PersistentData) is kept next to the executable, so the
+  launcher materializes the payload into the per-user SNAP_USER_DATA on first run and
+  refreshes it on upgrades (version marker in the snap).
+
+  Homepage: https://github.com/Graphene-Lab/AgentBridge
+grade: stable
+confinement: classic
+
+apps:
+  agentbridge:
+    command: bin/agentbridge-launcher
+  agentbridge-headless:
+    command: bin/agentbridge-launcher
+    args: [--headless]
+
+parts:
+  engine:
+    plugin: dump
+    source: https://github.com/Graphene-Lab/AgentBridge/releases/download/v@@VERSION@@/agentbridge-linux-x64.tar.gz
+    source-type: tar
+    source-checksum: sha256/@@SHA256@@
+  launcher:
+    plugin: dump
+    source: files

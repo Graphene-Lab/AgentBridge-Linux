@@ -1,0 +1,57 @@
+# Maintainer: Graphene-Lab <https://github.com/Graphene-Lab>
+# Binary package: AgentBridge releases are published as self-contained single-file
+# archives per release (see the upstream GitHub releases). Version bump procedure:
+#   1. update pkgver + the archive URLs below,
+#   2. replace the sha256sums (use the "digest" from the GitHub release API),
+#   3. run `makepkg --printsrcinfo > .SRCINFO` and commit both files.
+pkgname=agentbridge-bin
+pkgver=1.26.9.8
+pkgrel=1
+pkgdesc='Self-hosted AI personal assistant (AGPL-3.0): terminal chat UI + local OpenAI-compatible server, desktop web client'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Graphene-Lab/AgentBridge'
+license=('AGPL-3.0-or-later')
+depends=('bash')
+optdepends=('python3: desktop web client launcher (/web)')
+source_x86_64=(
+  "agentbridge-linux-x64.tar.gz::https://github.com/Graphene-Lab/AgentBridge/releases/download/v1.26.09.08/agentbridge-linux-x64.tar.gz"
+  'agentbridge'
+  'agentbridge.desktop'
+  'agentbridge.png'
+)
+source_aarch64=(
+  "agentbridge-linux-arm64.tar.gz::https://github.com/Graphene-Lab/AgentBridge/releases/download/v1.26.09.08/agentbridge-linux-arm64.tar.gz"
+  'agentbridge'
+  'agentbridge.desktop'
+  'agentbridge.png'
+)
+sha256sums_x86_64=(
+  '39b474528be79ba3aea00b0d7d625a5bb62eb91185b5cd462084044c2a8e80d7'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+)
+sha256sums_aarch64=(
+  'a2472b8a28d3c8074ca885e3964a8aa46d92b07dbc4fde8bce96a3e5fc717900'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+)
+
+package() {
+  # The whole archive goes into the read-only image dir (the launcher materializes it).
+  local img="$pkgdir/usr/share/agentbridge"
+  install -d "$img" "$pkgdir/usr/bin" "$pkgdir/usr/share/applications" "$pkgdir/usr/share/pixmaps"
+  # Archive is extracted at $srcdir root with no wrapper folder; skip our three files.
+  for f in "$srcdir"/*; do
+    case "$(basename "$f")" in
+      agentbridge|agentbridge.desktop|agentbridge.png|*.tar.gz) ;;
+      *) cp -a "$f" "$img/" ;;
+    esac
+  done
+  # Version marker so the launcher refreshes the user copy on package upgrades.
+  printf '%s\n' "$pkgver" > "$img/agentbridge-version.txt"
+  install -Dm755 "$srcdir/agentbridge" "$pkgdir/usr/bin/agentbridge"
+  install -Dm644 "$srcdir/agentbridge.desktop" "$pkgdir/usr/share/applications/agentbridge.desktop"
+  install -Dm644 "$srcdir/agentbridge.png" "$pkgdir/usr/share/pixmaps/agentbridge.png"
+}

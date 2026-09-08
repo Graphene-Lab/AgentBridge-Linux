@@ -1,0 +1,26 @@
+#!/bin/bash
+# AgentBridge launcher for the classic snap.
+#
+# $SNAP is read-only; the engine keeps its user config under PersistentData/ next to the
+# executable, so the payload is materialized into $SNAP_USER_DATA and refreshed when the
+# version marker (shipped in the snap root) changes.
+set -e
+SRC="$SNAP"
+DATA="${SNAP_USER_DATA:-$HOME/snap/agentbridge/common}"
+DEST="$DATA/agentbridge/engine"
+mkdir -p "$DATA/agentbridge"
+
+if [ -x "$DEST/agent" ]; then
+    img="$(cat "$SRC/agentbridge-version.txt" 2>/dev/null || echo unknown)"
+    dst="$(cat "$DEST/agentbridge-version.txt" 2>/dev/null || echo unknown)"
+    if [ "$img" != "$dst" ]; then
+        cp -a "$SRC/." "$DEST/"
+        printf '%s\n' "$img" > "$DEST/agentbridge-version.txt"
+    fi
+else
+    rm -rf "$DEST.partial"
+    cp -a "$SRC" "$DEST.partial"
+    mv "$DEST.partial" "$DEST"
+fi
+
+exec "$DEST/agent" "$@"

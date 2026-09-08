@@ -1,0 +1,83 @@
+# Builds the AgentBridge classic snap from the official release archive and, when the
+# store credentials are configured, publishes it to the Snap Store.
+#
+# Dispatch:
+#   gh workflow run snap-release.yml --repo Graphene-Lab/AgentBridge-Linux
+#
+# To enable the automatic store publish, register the snap name once
+# (`snapcraft register agentbridge`, requires an Ubuntu SSO login) and set the
+# SNAPCRAFT_STORE_CREDENTIALS secret (from `snapcraft export-login`) on this repo.
+name: Build and Publish Snap
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "AgentBridge version to package (tag without v, e.g. 1.26.09.08)"
+        required: false
+        default: latest
+
+concurrency:
+  group: snap-release
+  cancel-in-progress: false
+
+jobs:
+  snap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Render snapcraft.yaml for the target version
+        shell: bash
+        run: |
+          latest_tag() {
+            curl -fsSL "https://api.github.com/repos/Graphene-Lab/AgentBridge/releases/latest" 2>/dev/null \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin).get("tag_name") or "")' 2>/dev/null || true
+          }
+          VER="${{ inputs.version }}"
+          if [ -z "$VER" ] || [ "$VER" = "latest" ]; then
+            VER="$(latest_tag)"; VER="${VER#v}"
+          fi
+          [ -n "$VER" ] || { echo "::error::cannot resolve version"; exit 1; }
+          echo "version=$VER"
+          # engine archive sha256 (digest) + version marker + source URL are pinned in the
+          # template; regenerate snap/snapcraft.yaml from snap/snapcraft.yml.in.
+          python3 - "$VER" <<'PY'
+          import json, os, pathlib, sys, urllib.request
+          ver = sys.argv[1]
+          tpl = pathlib.Path("snap/snapcraft.yml.in").read_text(encoding="utf-8")
+          digest = ""
+          with urllib.request.urlopen(
+              f"https://api.github.com/repos/Graphene-Lab/AgentBridge/releases/tags/v{ver}"
+          ) as r:
+              rel = json.load(r)
+          digest = next(a["digest"].split(":", 1)[1]
+                        for a in rel["assets"]
+                        if a["name"] == "agentbridge-linux-x64.tar.gz")
+          out = tpl.replace("@@VERSION@@", ver).replace("@@SHA256@@", digest)
+          pathlib.Path("snap/snapcraft.yaml").write_text(out, encoding="utf-8")
+          pathlib.Path("snap/files/agentbridge-version.txt").write_text(ver + "\n", encoding="utf-8")
+          print("rendered snap/snapcraft.yaml")
+          PY
+
+      - name: Build the snap
+        shell: bash
+        run: |
+          docker run --rm -v "$PWD":/build -w /build/snap \
+            snapcore/snapcraft:stable sh -c \
+            "snapcraft --destructive-mode -o out && ls -lh out/*.snap"
+
+      - name: Publish to the Snap Store
+        shell: bash
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [ -z "$SNAPCRAFT_STORE_CREDENTIALS" ]; then
+            echo "SNAPCRAFT_STORE_CREDENTIALS not configured — snap built locally, publish skipped"
+            exit 0
+          fi
+          docker run --rm -v "$PWD":/build -w /build/snap \
+            -e SNAPCRAFT_STORE_CREDENTIALS \
+            snapcore/snapcraft:stable sh -c \
+            "snapcraft upload out/*.snap --release=stable"

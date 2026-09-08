@@ -1,0 +1,36 @@
+#!/bin/bash
+# AgentBridge launcher for the system package (AUR / apt-style installs).
+#
+# The engine keeps its user-editable config under PersistentData/ NEXT TO the executable
+# (AppConfig). /usr/share/agentbridge is root-owned and read-only, so the first launch
+# materializes the payload into the user's writable data dir and later runs refresh it
+# when the version marker (written by the package at install time) changes — PersistentData
+# inside the copy is never touched by a refresh.
+set -e
+SRC=/usr/share/agentbridge
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+DEST="$DATA_HOME/agentbridge/engine"
+
+if [ -x "$DEST/agent" ]; then
+    img_ver="$(cat "$SRC/agentbridge-version.txt" 2>/dev/null || echo unknown)"
+    dst_ver="$(cat "$DEST/agentbridge-version.txt" 2>/dev/null || echo unknown)"
+    if [ "$img_ver" != "$dst_ver" ]; then
+        cp -a "$SRC/." "$DEST/"
+        printf '%s\n' "$img_ver" > "$DEST/agentbridge-version.txt"
+    fi
+elif [ -x "$SRC/agent" ]; then
+    mkdir -p "$DATA_HOME/agentbridge"
+    rm -rf "$DEST.partial"
+    cp -a "$SRC" "$DEST.partial"
+    mv "$DEST.partial" "$DEST"
+fi
+
+if [ -x "$DEST/agent" ]; then
+    exec "$DEST/agent" "$@"
+fi
+if [ -x "$SRC/agent" ]; then
+    # Read-only fallback (no space / copy failure): still runs, config cannot persist.
+    exec "$SRC/agent" "$@"
+fi
+echo "AgentBridge engine not found in /usr/share/agentbridge" >&2
+exit 1

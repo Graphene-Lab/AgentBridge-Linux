@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AgentBridge
+GenericName=AI Personal Assistant
+Comment=Self-hosted AI assistant: full-screen terminal chat UI and local OpenAI-compatible server
+Exec=env BAMF_DESKTOP_FILE_HINT=/var/lib/snapd/desktop/applications/agentbridge_agentbridge.desktop /snap/bin/agentbridge
+Icon=${SNAP}/meta/gui/agentbridge.png
+Terminal=true
+Categories=Network;Utility;
+Keywords=AI;assistant;agent;chat;OpenAI;terminal;

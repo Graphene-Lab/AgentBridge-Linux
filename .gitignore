@@ -1,5 +1,6 @@
 # Rendered / generated during the CI build (see linux-release.yml)
 packaging/agentbridge.yml
+packaging/source/agentbridge.yml
 build-icon.svg
 build-icons/
 repo/

@@ -1,0 +1,98 @@
+# AgentBridge FROM SOURCE — experimental proof manifest (x86_64).
+#
+# Rendered by .github/workflows/sourcebuild-proof.yml from this template into
+# packaging/source/agentbridge.yml (gitignored). NOT part of the release pipeline.
+#
+# This validates the Flathub-style build model: the ENGINE is compiled from the
+# AgentBridge source tag inside the sandbox (no prebuilt archive wrapped), using the
+# official .NET SDK tarball as a module source. The rest of the payload is the same
+# as the release pipeline (GiraffeAI web client, branding/icons).
+#
+# Phase 1 (current): the build runs with flatpak-builder --allow-network-access, i.e.
+# dotnet restore + the model/voice asset targets behave like a dev machine.
+# Phase 2 (Flathub-ready): drop the network flag and feed NuGet offline through
+# nuget-sources.json (flatpak-dotnet-generator) + a pinned SDK/kokoro source.
+#
+# app-id / runtime / command are identical to the release bundle, so this proof
+# produces a drop-in equivalent for the same AgentBridge version.
+app-id: io.github.graphene_lab.agentbridge
+runtime: org.gnome.Platform
+runtime-version: '48'
+sdk: org.gnome.Sdk
+command: agent-run
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=x11
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=home
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.secrets
+
+modules:
+  # ── Engine built from source ──────────────────────────────────────────────────
+  # git: the AgentBridge tag's commit (immutable). archive: the official .NET 10 SDK
+  # tarball (self-contained build tool — sidesteps sdk-extension/runtime compatibility).
+  # The single build-command block exports the SDK env then publishes the exact same
+  # single-file self-contained configuration the AgentBridge CI uses.
+  - name: agentbridge-source
+    buildsystem: simple
+    build-commands:
+      - |
+        export DOTNET_ROOT="$PWD/dotnet-sdk"
+        export PATH="$DOTNET_ROOT:$PATH"
+        export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+        export DOTNET_CLI_HOME="$PWD/.dotnet" NUGET_PACKAGES="$PWD/.nuget"
+        export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+        dotnet publish AgentBridge.csproj -c Release -r linux-x64 \
+          --self-contained true \
+          -p:PublishSingleFile=true \
+          -p:IncludeNativeLibrariesForSelfExtract=true \
+          -p:DebugType=None -p:DebugSymbols=false \
+          -o publish-out
+        mkdir -p /app/lib/agentbridge
+        cp -a publish-out/. /app/lib/agentbridge/
+        printf '%s\n' '@@VERSION@@' > /app/lib/agentbridge/agentbridge-version.txt
+    sources:
+      - type: git
+        url: https://github.com/Graphene-Lab/AgentBridge
+        commit: '@@COMMIT@@'
+      - type: archive
+        url: https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.400/dotnet-sdk-10.0.400-linux-x64.tar.gz
+        sha256: "@@SDK_SHA256@@"
+        dest: dotnet-sdk
+        only-arches:
+          - x86_64
+
+  # ── Giraffe AI web client (the desktop GUI) ──────────────────────────────────
+  - name: giraffeai-webclient
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/lib/agentbridge/GiraffeAIWebClient
+      - cp -a . /app/lib/agentbridge/GiraffeAIWebClient/
+      - printf '%s\n' '@@CLIENT_VERSION@@' > /app/lib/agentbridge/GiraffeAIWebClient/version.txt
+    sources:
+      - type: archive
+        url: https://github.com/Graphene-Lab/GiraffeAI/releases/download/v@@CLIENT_VERSION@@/giraffeai-@@CLIENT_VERSION@@.zip
+        sha256: "@@CLIENT_SHA256@@"
+        strip-components: 0
+
+  # ── Launchers + desktop integration (same files as the release pipeline) ──────
+  - name: branding
+    buildsystem: simple
+    sources:
+      - type: dir
+        path: ../branding
+      - type: dir
+        path: ../../build-icons
+    build-commands:
+      - install -Dm755 agent-run /app/bin/agent-run
+      - install -Dm755 agent-desktop /app/bin/agent-desktop
+      - install -Dm644 io.github.graphene_lab.agentbridge.desktop /app/share/applications/io.github.graphene_lab.agentbridge.desktop
+      - install -Dm644 io.github.graphene_lab.agentbridge.Terminal.desktop /app/share/applications/io.github.graphene_lab.agentbridge.Terminal.desktop
+      - install -Dm644 io.github.graphene_lab.agentbridge.metainfo.xml /app/share/metainfo/io.github.graphene_lab.agentbridge.metainfo.xml
+      - for s in 64 128 256 512; do install -Dm644 icons/hicolor/${s}x${s}/apps/io.github.graphene_lab.agentbridge.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.graphene_lab.agentbridge.png; done

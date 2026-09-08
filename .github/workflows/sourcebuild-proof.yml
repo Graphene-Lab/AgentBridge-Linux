@@ -1,0 +1,166 @@
+# AgentBridge FROM SOURCE — experimental proof build (NOT the release pipeline).
+#
+# Validates the Flathub-style build model: the engine is compiled from the AgentBridge
+# source tag inside a flatpak sandbox (official .NET 10 SDK tarball as a module source),
+# then bundled with the same web client + branding as the release bundle. Run manually:
+#
+#   gh workflow run sourcebuild-proof.yml -f version=v1.26.09.08   # or "latest"
+#
+# Phase 1: the engine module builds with network access (dev-machine semantics) to
+# validate SDK-in-sandbox + dotnet publish. Phase 2 (Flathub-ready) will drop the
+# network flag and switch the module to the offline nuget-sources.json feed.
+name: Source-Build Proof (experimental)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "AgentBridge tag to build from source (default: latest)"
+        required: false
+        default: latest
+
+concurrency:
+  group: sourcebuild-proof
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  APPID: io.github.graphene_lab.agentbridge
+  UPSTREAM: Graphene-Lab/AgentBridge
+  CLIENT_REPO: Graphene-Lab/GiraffeAI
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install flatpak toolchain
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak flatpak-builder librsvg2-bin xvfb
+
+      - name: Resolve upstream tag + commit
+        id: ver
+        shell: bash
+        run: |
+          UPSTREAM="${{ env.UPSTREAM }}"
+          latest_tag() {
+            curl -fsSL "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin).get("tag_name") or "")' 2>/dev/null \
+              || true
+          }
+          TAG="${{ inputs.version }}"
+          if [ -z "$TAG" ] || [ "$TAG" = "latest" ]; then
+            TAG="$(latest_tag "$UPSTREAM")"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::cannot resolve upstream release"
+            exit 1
+          fi
+          VER="${TAG#v}"
+          COMMIT="$(git ls-remote "https://github.com/${UPSTREAM}" "refs/tags/${TAG}" | cut -f1)"
+          if [ -z "$COMMIT" ]; then
+            echo "::error::cannot resolve commit of tag ${TAG}"
+            exit 1
+          fi
+          echo "tag=$TAG version=$VER commit=$COMMIT"
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
+
+          CTAG="$(latest_tag "${{ env.CLIENT_REPO }}")"
+          echo "CVER=${CTAG#v}" >> "$GITHUB_ENV"
+
+      - name: Download Giraffe AI web client + compute checksum
+        shell: bash
+        run: |
+          URL="https://github.com/${{ env.CLIENT_REPO }}/releases/download/v${CVER}/giraffeai-${CVER}.zip"
+          curl -fsSL -o giraffeai.zip "$URL"
+          echo "CLIENT_SHA256=$(sha256sum giraffeai.zip | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Download .NET SDK + compute checksum
+        shell: bash
+        run: |
+          URL="https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.400/dotnet-sdk-10.0.400-linux-x64.tar.gz"
+          curl -fsSL -o dotnet-sdk.tar.gz "$URL"
+          echo "SDK_SHA256=$(sha256sum dotnet-sdk.tar.gz | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          ls -lh dotnet-sdk.tar.gz
+          rm -f dotnet-sdk.tar.gz
+
+      - name: Generate launcher icons (giraffe on brand gradient)
+        shell: bash
+        run: |
+          APPID="${{ env.APPID }}"
+          python3 - <<'PY'
+          import pathlib, re
+          src = pathlib.Path("packaging/branding/giraffe.svg").read_text()
+          m = re.search(r'<g[^>]*>.*?</g>', src, re.S)
+          if not m:
+              raise SystemExit("cannot find the giraffe group in giraffe.svg")
+          body = m.group(0)
+          svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+          <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#6c5ce7"/><stop offset="1" stop-color="#3b2f9e"/>
+          </linearGradient></defs>
+          <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+          <g fill="#ffffff"><g transform="translate(60 96) scale(0.98 0.98)">{body}</g></g>
+          </svg>'''
+          pathlib.Path("build-icon.svg").write_text(svg)
+          PY
+          for s in 64 128 256 512; do
+            mkdir -p "build-icons/icons/hicolor/${s}x${s}/apps"
+            rsvg-convert -w "$s" -h "$s" build-icon.svg \
+              -o "build-icons/icons/hicolor/${s}x${s}/apps/${APPID}.png"
+          done
+
+      - name: Render the source-build manifest
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, os
+          root = pathlib.Path(".").resolve()
+          tpl = (root / "packaging" / "source" / "agentbridge-source.yml.tmpl").read_text()
+          out = tpl
+          out = out.replace("@@VERSION@@", os.environ["VER"])
+          out = out.replace("@@COMMIT@@", os.environ["COMMIT"])
+          out = out.replace("@@SDK_SHA256@@", os.environ["SDK_SHA256"])
+          out = out.replace("@@CLIENT_VERSION@@", os.environ["CVER"])
+          out = out.replace("@@CLIENT_SHA256@@", os.environ["CLIENT_SHA256"])
+          (root / "packaging" / "source" / "agentbridge.yml").write_text(out)
+          print("rendered packaging/source/agentbridge.yml")
+          PY
+
+      - name: Add Flathub remote + install GNOME runtime/SDK (x86_64)
+        shell: bash
+        run: |
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y --noninteractive flathub \
+            org.gnome.Platform//48 org.gnome.Sdk//48
+
+      - name: Build engine from source (flatpak-builder, network allowed)
+        shell: bash
+        run: |
+          sudo flatpak-builder \
+            --force-clean \
+            --disable-rofiles-fuse \
+            --allow-network-access \
+            --repo=repo-proof \
+            .build-proof \
+            packaging/source/agentbridge.yml
+          sudo flatpak build-bundle \
+            --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
+            repo-proof \
+            agentbridge-source-proof.flatpak \
+            ${{ env.APPID }} \
+            master
+          ls -lh agentbridge-source-proof.flatpak
+          sha256sum agentbridge-source-proof.flatpak
+
+      - name: Smoke check (install + doctor)
+        shell: bash
+        continue-on-error: true
+        run: |
+          flatpak install --user -y --noninteractive ./agentbridge-source-proof.flatpak
+          flatpak run --user --command=agent-desktop ${{ env.APPID }} --doctor

@@ -50,18 +50,21 @@ jobs:
           sudo apt-get install -y -qq flatpak flatpak-builder librsvg2-bin xvfb
 
       # Everything flatpak needs in this job, installed once up-front:
-      #  - org.gnome.*48   → the app runtime/SDK (builder)
-      #  - org.freedesktop.Sdk//24.08 + Extension.dotnet10 → the flatpak-dotnet-generator
-      #    environment (it runs `dotnet restore` inside that SDK, then reads the .sha512
-      #    files NuGet writes into the packages dir)
-      - name: Add Flathub remote + install runtimes and SDKs
+      # org.gnome.*48 → the app runtime/SDK (builder).
+      - name: Add Flathub remote + install GNOME runtime/SDK (x86_64)
         shell: bash
         run: |
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install --system -y --noninteractive flathub \
-            org.gnome.Platform//48 org.gnome.Sdk//48 \
-            org.freedesktop.Sdk//24.08 \
-            org.freedesktop.Sdk.Extension.dotnet10//24.08
+            org.gnome.Platform//48 org.gnome.Sdk//48
+
+      # Host .NET: used ONLY to restore the project into a flat packages dir whose
+      # *.nupkg.sha512 files become the offline feed. Using the same SDK version as the
+      # build module (10.0.400) keeps every package (runtime packs included) consistent.
+      - name: Setup .NET (host, for the offline feed)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.400'
 
       - name: Resolve upstream tag + commit
         shell: bash
@@ -111,18 +114,39 @@ jobs:
 
       - name: Generate nuget-sources.json (offline feed descriptor)
         shell: bash
-        env:
-          # flatpak (run as the ubuntu user) needs a writable XDG_RUNTIME_DIR.
-          XDG_RUNTIME_DIR: /tmp/flatpak-run
         run: |
-          mkdir -p /tmp/flatpak-run && chmod 700 /tmp/flatpak-run
-          curl -fsSL -o "$RUNNER_TEMP/generator.py" \
-            https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/dotnet/flatpak-dotnet-generator.py
-          python3 "$RUNNER_TEMP/generator.py" \
-            packaging/source/nuget-sources.json \
-            "${{ env.STAGING }}/src/AgentBridge.csproj" \
-            -f 24.08 -d 10 -r linux-x64
-          python3 -c "import json;d=json.load(open('packaging/source/nuget-sources.json'));print('packages:',len(d));print(json.dumps(d[0],indent=1)[:500])"
+          TMP="${{ env.STAGING }}/nugettmp"
+          # Same publish properties as the build module, restore only: guarantees the
+          # feed contains every package the module publish will resolve offline
+          # (self-contained runtime packs + ILLink included).
+          dotnet restore "${{ env.STAGING }}/src/AgentBridge.csproj" \
+            -r linux-x64 --packages "$TMP" \
+            -p:SelfContained=true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:NuGetAudit=false
+          python3 - "$TMP" <<'PY'
+          import hashlib, json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          entries = []
+          for sha_file in sorted(root.rglob("*.nupkg.sha512")):
+              pkg_id = sha_file.parent.parent.name
+              version = sha_file.parent.name
+              filename = f"{pkg_id}.{version}.nupkg"
+              url = f"https://api.nuget.org/v3-flatcontainer/{pkg_id.lower()}/{version}/{filename}"
+              entries.append({
+                  "type": "file",
+                  "url": url,
+                  "sha512": sha_file.read_text().strip(),
+                  "dest": "nuget-sources",
+                  "dest-filename": filename,
+              })
+          pathlib.Path("packaging/source/nuget-sources.json").write_text(
+              json.dumps(sorted(entries, key=lambda e: e["dest-filename"]), indent=2)
+          )
+          print("packages:", len(entries))
+          PY
+          python3 -c "import json;print(json.dumps(json.load(open('packaging/source/nuget-sources.json'))[0],indent=1)[:400])"
 
       - name: Stage payload (kokoro.onnx, Tools/, .playwright) from the release archive
         shell: bash

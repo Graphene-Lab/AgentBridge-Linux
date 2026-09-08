@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.graphene_lab.agentbridge</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <name>AgentBridge</name>
+  <summary>Self-hosted AI personal assistant that automates office work</summary>
+  <developer_name>Graphene-Lab</developer_name>
+
+  <url type="homepage">https://github.com/Graphene-Lab/AgentBridge</url>
+  <url type="help">https://graphenelab.it/AgentBridge/</url>
+  <url type="bugtracker">https://github.com/Graphene-Lab/AgentBridge/issues</url>
+
+  <launchable type="desktop-id">io.github.graphene_lab.agentbridge.desktop</launchable>
+
+  <description>
+    <p>AgentBridge is a self-hosted server that runs its own AI agents behind two primary
+    interfaces in a single process: a full-screen chat terminal (TUI) and an HTTP API that
+    speaks the standard OpenAI protocol, so any OpenAI-compatible client drives the same
+    agents.</p>
+    <p>This desktop package starts the engine locally and opens the bundled Giraffe AI web
+    client in its own window — a real desktop application that looks and behaves like any
+    other app on your Linux desktop, with an application icon in the launcher.</p>
+    <p>Bring agentic power to your office work without sacrificing privacy: connect to your
+    preferred AI (a local model such as Ollama, or any OpenAI-compatible provider) and the
+    agent drafts documents, works on spreadsheets and presentations, interacts with email
+    and Telegram, browses the web and reads your local knowledge base — your files never
+    leave your machine.</p>
+    <p>The agent's abilities are compiled .NET assemblies loaded as plugins from the
+    Tools/ folder and driven in-process. Neural text-to-speech (Kokoro) is included;
+    everything runs locally on your own hardware.</p>
+  </description>
+
+  <categories>
+    <category>Network</category>
+    <category>Utility</category>
+  </categories>
+
+  <keywords>
+    <keyword>AI</keyword>
+    <keyword>assistant</keyword>
+    <keyword>agent</keyword>
+    <keyword>chat</keyword>
+    <keyword>OpenAI</keyword>
+  </keywords>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>AgentBridge desktop chat (Giraffe AI client)</caption>
+      <image>https://raw.githubusercontent.com/Graphene-Lab/AgentBridge/master/media/store/agentbridge-tui-1.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Office documents generated end-to-end by the agent</caption>
+      <image>https://raw.githubusercontent.com/Graphene-Lab/AgentBridge/master/media/store/agentbridge-store-1.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Watch your AI team work (OfficeManager) — demo video</caption>
+      <video container="webm" codec="vp9" width="1024" height="826">https://raw.githubusercontent.com/Graphene-Lab/AgentBridge-Linux/main/media/office-manager-demo.webm</video>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1" />
+</component>

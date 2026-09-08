@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""AgentBridge Desktop — the agent as a desktop app.
+
+Starts the local AgentBridge engine (headless, if it is not already running), serves the
+bundled Giraffe AI web client on a local port and opens it in a desktop WebKitGTK window,
+auto-connected to the local engine. This is the same experience as the engine's own
+"/web" command, but rendered as a real desktop application (window + launcher icon)
+instead of a browser tab.
+
+First launch materializes the engine image (/app/lib/agentbridge, read-only in a Flatpak)
+into the writable $XDG_DATA_HOME/agentbridge/engine — the engine persists its user
+configuration under PersistentData/ next to the executable, so it must run from a
+writable copy (see agent-run for the same logic in shell).
+
+Usage:
+  agent-desktop            start the engine + open the desktop chat window
+  agent-desktop --doctor   print environment diagnostics and exit (no window)
+"""
+import argparse
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+APP_ID = "io.github.graphene_lab.agentbridge"
+IMAGE = "/app/lib/agentbridge"
+DEFAULT_PORT = 5290
+MODEL = "default-agent"
+
+
+def data_home():
+    return os.environ.get("XDG_DATA_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "share"
+    )
+
+
+ENGINE_DIR = os.path.join(data_home(), "agentbridge", "engine")
+LOG_DIR = os.path.join(data_home(), "agentbridge", "logs")
+
+
+def log(msg):
+    print(f"[agent-desktop] {msg}", flush=True)
+
+
+# ── engine payload materialization (mirrors packaging/branding/agent-run) ──────
+def ensure_engine():
+    img_agent = os.path.join(IMAGE, "agent")
+    dst_agent = os.path.join(ENGINE_DIR, "agent")
+    if not os.path.isdir(IMAGE) or not os.path.isfile(img_agent):
+        raise RuntimeError(f"engine image missing at {IMAGE}")
+    os.makedirs(os.path.join(data_home(), "agentbridge"), exist_ok=True)
+
+    def marker(directory):
+        try:
+            with open(os.path.join(directory, "agentbridge-version.txt")) as fh:
+                return fh.read().strip()
+        except OSError:
+            return "unknown"
+
+    if os.path.isfile(dst_agent):
+        if marker(IMAGE) != marker(ENGINE_DIR):
+            # Overlay refresh on Flatpak update: binaries/docs update, PersistentData
+            # (never part of an archive) is preserved.
+            _copy_overlay(IMAGE, ENGINE_DIR)
+            _write_marker()
+    else:
+        partial_dir = ENGINE_DIR + ".partial"
+        shutil.rmtree(partial_dir, ignore_errors=True)
+        shutil.copytree(IMAGE, partial_dir)
+        os.replace(partial_dir, ENGINE_DIR)
+        _write_marker()
+    if not os.path.isfile(dst_agent):
+        raise RuntimeError(f"engine not materialized at {dst_agent}")
+    return dst_agent
+
+
+def _write_marker():
+    src = os.path.join(IMAGE, "agentbridge-version.txt")
+    if os.path.isfile(src):
+        shutil.copy2(src, os.path.join(ENGINE_DIR, "agentbridge-version.txt"))
+
+
+def _copy_overlay(src, dst):
+    for name in os.listdir(src):
+        s = os.path.join(src, name)
+        d = os.path.join(dst, name)
+        if os.path.isdir(s) and not os.path.islink(s):
+            os.makedirs(d, exist_ok=True)
+            _copy_overlay(s, d)
+        elif os.path.islink(s):
+            if os.path.lexists(d):
+                os.unlink(d)
+            os.symlink(os.readlink(s), d)
+        elif os.path.isfile(s):
+            shutil.copy2(s, d)
+
+
+# ── engine base URL ─────────────────────────────────────────────────────────────
+def read_engine_base():
+    """Base URL the engine listens on: the user-editable appsettings.json under
+    PersistentData/ wins, the documented default is http://localhost:5290."""
+    url = f"http://127.0.0.1:{DEFAULT_PORT}"
+    appsettings = os.path.join(ENGINE_DIR, "PersistentData", "appsettings.json")
+    try:
+        with open(appsettings) as fh:
+            urls = json.load(fh).get("Urls")
+        if isinstance(urls, str) and urls.strip():
+            m = re.match(r"^(https?)://([^:/]+)(?::(\d+))?", urls.strip())
+            if m:
+                scheme, _, port = m.group(1), m.group(2), m.group(3)
+                url = f"{scheme}://127.0.0.1:{port or DEFAULT_PORT}"
+    except (OSError, ValueError):
+        pass
+    return url
+
+
+def engine_healthy(base, timeout=1.0):
+    try:
+        with urllib.request.urlopen(base + "/health", timeout=timeout) as resp:
+            return resp.status == 200
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def start_engine(agent_bin, base):
+    """Spawn the engine headless. Returns the Popen (caller stops it) or None when an
+    engine was already answering on the port (the engine reuses a running instance,
+    like the TUI does)."""
+    if engine_healthy(base):
+        log(f"engine already running on {base} — reusing it")
+        return None
+    os.makedirs(LOG_DIR, exist_ok=True)
+    log_file = open(os.path.join(LOG_DIR, "desktop-headless.log"), "ab")
+    log(f"starting engine headless: {agent_bin} --headless --no-update")
+    proc = subprocess.Popen(
+        [agent_bin, "--headless", "--no-update"],
+        stdout=log_file,
+        stderr=log_file,
+        stdin=subprocess.DEVNULL,
+    )
+    for _ in range(60):  # up to ~30 s for first-run model/TTS paths
+        if engine_healthy(base, timeout=0.5):
+            log(f"engine ready on {base}")
+            return proc
+        if proc.poll() is not None:
+            raise RuntimeError(
+                f"engine exited early (code {proc.returncode}) — see {LOG_DIR}/desktop-headless.log"
+            )
+        time.sleep(0.5)
+    proc.terminate()
+    raise RuntimeError(f"engine did not answer on {base} within 30 s")
+
+
+# ── static file server for the bundled web client ───────────────────────────────
+class QuietHandler(SimpleHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+
+def serve_client(client_dir):
+    if not os.path.isfile(os.path.join(client_dir, "index.html")):
+        raise RuntimeError(f"web client not bundled at {client_dir}")
+    handler = partial(QuietHandler, directory=client_dir)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+def provider_url(http_port, base):
+    provider = {
+        "name": "AgentBridge",
+        "format": "openai",
+        "model": MODEL,
+        "endpoint": f"{base}/v1/chat/completions",
+    }
+    query = urllib.parse.quote(json.dumps(provider))
+    return f"http://127.0.0.1:{http_port}/?provider={query}"
+
+
+# ── WebKitGTK window ────────────────────────────────────────────────────────────
+def open_webview(url):
+    """Open url in a desktop WebKitGTK window. Returns (ok, detail). Tries GTK4+WebKit 6
+    first (current GNOME runtime), then GTK3+WebKit2 4.1 (older runtimes)."""
+    for gtk_ver, webkit_ns, webkit_ver in (("4.0", "WebKit", "6.0"), ("3.0", "WebKit2", "4.1")):
+        try:
+            import gi  # noqa: PLC0415
+
+            gi.require_version("Gtk", gtk_ver)
+            gi.require_version(webkit_ns, webkit_ver)
+            from gi.repository import GLib, Gtk  # noqa: PLC0415
+            from gi.repository import WebKit as WK  # noqa: PLC0415
+
+            title = "AgentBridge — Giraffe AI"
+            if gtk_ver == "4.0":
+                app = Gtk.Application(application_id=APP_ID, flags=0)
+
+                def on_activate(_app):
+                    window = Gtk.ApplicationWindow(application=_app, title=title)
+                    window.set_default_size(1180, 780)
+                    webview = WK.WebView.new()
+                    webview.load_uri(url)
+                    window.set_child(webview)
+                    window.present()
+
+                app.connect("activate", on_activate)
+                app.run(None)
+            else:
+                Gtk.init(None)
+                window = Gtk.Window(title=title)
+                window.set_default_size(1180, 780)
+                webview = WK.WebView.new()
+                webview.load_uri(url)
+                window.add(webview)
+                window.show_all()
+                window.connect("destroy", Gtk.main_quit)
+                Gtk.main()
+            return True, f"WebKitGTK {webkit_ver} (GTK {gtk_ver})"
+        except (ImportError, ValueError) as exc:
+            detail = f"{webkit_ns} {webkit_ver}: {exc}"
+    return False, detail
+
+
+# ── main ────────────────────────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser(description="AgentBridge Desktop")
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="print environment diagnostics and exit (no engine start, no window)",
+    )
+    parser.add_argument(
+        "--browser",
+        action="store_true",
+        help="fallback mode: open the web client in the default browser instead of WebKit",
+    )
+    args = parser.parse_args()
+
+    if args.doctor:
+        # Each probe runs in its own process: gi.require_version is process-global,
+        # so GTK4 + GTK3 cannot both be requested in one interpreter.
+        probes = {
+            "gi (GObject Introspection)": "import gi",
+            "WebKit (GTK4)": "import gi; gi.require_version('Gtk','4.0'); gi.require_version('WebKit','6.0')",
+            "WebKit2 (GTK3)": "import gi; gi.require_version('Gtk','3.0'); gi.require_version('WebKit2','4.1')",
+        }
+        diag = []
+        for label, code in probes.items():
+            proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+            diag.append(f"{label}: {'OK' if proc.returncode == 0 else 'unavailable (' + (proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else proc.returncode) + ')'}")
+        diag.append(f"python: {sys.version.split()[0]}")
+        diag.append(f"engine image: {'OK' if os.path.isfile(os.path.join(IMAGE, 'agent')) else 'MISSING'}")
+        client_ok = os.path.isfile(os.path.join(IMAGE, "GiraffeAIWebClient", "index.html"))
+        diag.append(f"web client in image: {'OK' if client_ok else 'MISSING'}")
+        print("\n".join(diag))
+        return 0
+
+    engine_proc = None
+    httpd = None
+    try:
+        agent_bin = ensure_engine()
+        base = read_engine_base()
+        engine_proc = start_engine(agent_bin, base)
+        httpd = serve_client(os.path.join(ENGINE_DIR, "GiraffeAIWebClient"))
+        url = provider_url(httpd.server_address[1], base)
+
+        def stop(_signum=None, _frame=None):
+            log("shutting down")
+            if engine_proc is not None and engine_proc.poll() is None:
+                engine_proc.terminate()
+                try:
+                    engine_proc.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    engine_proc.kill()
+            if httpd is not None:
+                threading.Thread(target=httpd.shutdown, daemon=True).start()
+            raise SystemExit(0)
+
+        signal.signal(signal.SIGTERM, stop)
+        signal.signal(signal.SIGINT, stop)
+
+        ok = False
+        detail = ""
+        if not args.browser:
+            ok, detail = open_webview(url)
+            if ok:
+                log(f"desktop window closed (engine {'kept running' if engine_proc is None else 'stopped'})")
+                stop()
+        else:
+            detail = "--browser requested"
+
+        if not ok:
+            log(f"WebKitGTK unavailable ({detail}) — opening the web client in the default browser")
+            opener = shutil.which("xdg-open")
+            if opener is not None:
+                subprocess.Popen(
+                    [opener, url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                log(f"xdg-open not found in the sandbox — open this URL manually: {url}")
+            log("desktop mode running (Ctrl+C to stop)")
+            while True:
+                time.sleep(3600)
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log(f"ERROR: {exc}")
+        # Never leave an engine we spawned or a stray web server running.
+        if engine_proc is not None and engine_proc.poll() is None:
+            engine_proc.terminate()
+            try:
+                engine_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                engine_proc.kill()
+        if httpd is not None:
+            threading.Thread(target=httpd.shutdown, daemon=True).start()
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

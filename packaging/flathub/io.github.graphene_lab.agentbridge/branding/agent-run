@@ -1,0 +1,57 @@
+#!/bin/sh
+# agent-run — run the AgentBridge engine from the writable per-app data dir.
+#
+# The Flatpak image at /app/lib/agentbridge is read-only, but the engine keeps its
+# user-editable configuration under PersistentData/ NEXT TO the executable (AppConfig,
+# "single persistent-config directory" rule). The engine must therefore run from a
+# writable copy: on the first launch this script materializes the image once into
+# $XDG_DATA_HOME/agentbridge/engine, and afterwards re-syncs it only when the image
+# version marker changes (a Flatpak update) — binaries/docs refresh while PersistentData
+# (never part of a release archive) is preserved untouched.
+#
+# The packaged engine is version-pinned: with no arguments the update check is disabled
+# (--no-update) so a Flatpak install behaves like a distro package — the new engine
+# arrives with the next Flatpak build, published automatically at each AgentBridge
+# release. Explicit arguments (e.g. --headless) are passed through untouched for power
+# users who manage updates themselves.
+set -e
+
+SRC=/app/lib/agentbridge
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+DEST="$DATA_HOME/agentbridge/engine"
+
+materialize() {
+    mkdir -p "$DATA_HOME/agentbridge"
+    rm -rf "$DEST.partial"
+    cp -a "$SRC" "$DEST.partial"
+    mv "$DEST.partial" "$DEST"
+}
+
+if [ -x "$DEST/agent" ]; then
+    # Existing install: refresh binaries only when the packaged version differs.
+    # Overlay (cp -a SRC/. DEST/) never deletes user files — nothing in the archive
+    # lives under PersistentData/, so config, sessions and tool state survive updates.
+    img_ver="$(cat "$SRC/agentbridge-version.txt" 2>/dev/null || echo unknown)"
+    dst_ver="$(cat "$DEST/agentbridge-version.txt" 2>/dev/null || echo unknown)"
+    if [ "$img_ver" != "$dst_ver" ]; then
+        cp -a "$SRC/." "$DEST/"
+        printf '%s\n' "$img_ver" > "$DEST/agentbridge-version.txt"
+    fi
+elif [ -x "$SRC/agent" ]; then
+    materialize
+fi
+
+if [ -x "$DEST/agent" ]; then
+    if [ "$#" -eq 0 ]; then
+        exec "$DEST/agent" --no-update
+    fi
+    exec "$DEST/agent" "$@"
+fi
+if [ -x "$SRC/agent" ]; then
+    # Read-only fallback (copy failure / full disk): still runs, but configuration
+    # cannot persist. Reported by the engine itself on the first config write.
+    exec "$SRC/agent" "$@"
+fi
+
+echo "AgentBridge engine not found in the Flatpak image (/app/lib/agentbridge)" >&2
+exit 1

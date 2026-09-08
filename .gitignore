@@ -11,3 +11,4 @@ giraffeai.zip
 # OS noise
 .DS_Store
 Thumbs.db
+__pycache__/  

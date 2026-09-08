@@ -117,13 +117,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build tooling
+      - name: Probe container tooling
         shell: bash
         run: |
-          apt-get update -qq
-          # librsvg2-bin: icon rendering; xvfb: the flatpak-builder action runs the
-          # builder under xvfb-run.
-          apt-get install -y -qq librsvg2-bin xvfb
+          echo "--- /etc/os-release ---"; cat /etc/os-release 2>/dev/null || true
+          echo "--- whoami ---"; id
+          echo "--- tools ---"
+          for t in python3 curl rsvg-convert xvfb-run flatpak flatpak-builder unzip git; do
+            command -v "$t" >/dev/null 2>&1 && echo "$t: OK ($(command -v $t))" || echo "$t: MISSING"
+          done
 
       - name: Download engine archive + compute checksum
         shell: bash

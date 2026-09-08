@@ -54,8 +54,8 @@
       <image>https://raw.githubusercontent.com/Graphene-Lab/AgentBridge/master/media/store/agentbridge-store-1.png</image>
     </screenshot>
     <screenshot>
-      <caption>Watch your AI team work (OfficeManager)</caption>
-      <image>https://raw.githubusercontent.com/Graphene-Lab/AgentBridge/master/media/office-manager-demo.gif</image>
+      <caption>Watch your AI team work (OfficeManager) — demo video</caption>
+      <video container="webm" codec="vp9" width="1024" height="826">https://raw.githubusercontent.com/Graphene-Lab/AgentBridge-Linux/main/media/office-manager-demo.webm</video>
     </screenshot>
   </screenshots>
 

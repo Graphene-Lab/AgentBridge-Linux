@@ -126,7 +126,7 @@ jobs:
             -p:IncludeNativeLibrariesForSelfExtract=true \
             -p:NuGetAudit=false
           python3 - "$TMP" <<'PY'
-          import hashlib, json, pathlib, sys
+          import base64, binascii, json, pathlib, sys
           root = pathlib.Path(sys.argv[1])
           entries = []
           for sha_file in sorted(root.rglob("*.nupkg.sha512")):
@@ -134,10 +134,12 @@ jobs:
               version = sha_file.parent.name
               filename = f"{pkg_id}.{version}.nupkg"
               url = f"https://api.nuget.org/v3-flatcontainer/{pkg_id.lower()}/{version}/{filename}"
+              # The .nupkg.sha512 files NuGet writes are base64; flatpak-builder wants hex.
+              sha512 = binascii.hexlify(base64.b64decode(sha_file.read_text().strip())).decode()
               entries.append({
                   "type": "file",
                   "url": url,
-                  "sha512": sha_file.read_text().strip(),
+                  "sha512": sha512,
                   "dest": "nuget-sources",
                   "dest-filename": filename,
               })

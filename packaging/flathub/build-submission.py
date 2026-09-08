@@ -60,18 +60,22 @@ printf '%s\\n' '{a.version}' > /app/lib/agentbridge/agentbridge-version.txt"""
     doc = {
         "app-id": APP_ID,
         "runtime": "org.gnome.Platform",
-        "runtime-version": "48",
+        "runtime-version": "50",
         "sdk": "org.gnome.Sdk",
         "command": "agent-run",
+        # Narrowed for the Flathub review: whole-home access and explicit X11 are not
+        # allowed; the engine's user data lives in the per-app data dir (no flag needed),
+        # documents/browser-cache/downloads are granted per-directory.
         "finish-args": [
             "--share=ipc",
             "--share=network",
-            "--socket=x11",
             "--socket=wayland",
             "--socket=fallback-x11",
             "--socket=pulseaudio",
             "--device=dri",
-            "--filesystem=home",
+            "--filesystem=xdg-documents",
+            "--filesystem=xdg-download",
+            "--filesystem=xdg-cache",
             "--talk-name=org.freedesktop.Notifications",
             "--talk-name=org.freedesktop.secrets",
         ],

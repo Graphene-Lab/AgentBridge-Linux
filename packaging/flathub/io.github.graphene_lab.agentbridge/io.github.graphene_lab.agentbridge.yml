@@ -2,18 +2,19 @@
 # build-submission.py — do not edit by hand; see packaging/flathub/README.md.
 app-id: io.github.graphene_lab.agentbridge
 runtime: org.gnome.Platform
-runtime-version: '48'
+runtime-version: '50'
 sdk: org.gnome.Sdk
 command: agent-run
 finish-args:
 - --share=ipc
 - --share=network
-- --socket=x11
 - --socket=wayland
 - --socket=fallback-x11
 - --socket=pulseaudio
 - --device=dri
-- --filesystem=home
+- --filesystem=xdg-documents
+- --filesystem=xdg-download
+- --filesystem=xdg-cache
 - --talk-name=org.freedesktop.Notifications
 - --talk-name=org.freedesktop.secrets
 modules:

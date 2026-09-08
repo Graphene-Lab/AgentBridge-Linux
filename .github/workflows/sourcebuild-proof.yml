@@ -1,14 +1,19 @@
 # AgentBridge FROM SOURCE — experimental proof build (NOT the release pipeline).
 #
-# Validates the Flathub-style build model: the engine is compiled from the AgentBridge
-# source tag inside a flatpak sandbox (official .NET 10 SDK tarball as a module source),
-# then bundled with the same web client + branding as the release bundle. Run manually:
+# Validates the Flathub build model end-to-end on OUR CI: the engine is compiled from
+# the AgentBridge source tag inside a flatpak sandbox, NuGet is restored OFFLINE from a
+# local feed (flatpak-dotnet-generator + nuget-sources.json), and the bundle is produced
+# with the same web client + branding as the release bundle. Run manually:
 #
 #   gh workflow run sourcebuild-proof.yml -f version=v1.26.09.08   # or "latest"
 #
-# Phase 1: the engine module builds with network access (dev-machine semantics) to
-# validate SDK-in-sandbox + dotnet publish. Phase 2 (Flathub-ready) will drop the
-# network flag and switch the module to the offline nuget-sources.json feed.
+# Build commands have NO network in flatpak-builder (flatpak-builder 1.2 on Debian) —
+# everything the engine needs is staged as module sources before the build:
+#   - .NET SDK tarball (module source)
+#   - nuget-sources.json (every nupkg, module source → ./nuget-sources feed)
+#   - kokoro.onnx + Tools/ + .playwright extracted from the release archive (file/dir
+#     sources, staged in packaging/.proof-staging, gitignored)
+#   - GiraffeAI web client zip + branding
 name: Source-Build Proof (experimental)
 
 on:
@@ -28,6 +33,7 @@ env:
   APPID: io.github.graphene_lab.agentbridge
   UPSTREAM: Graphene-Lab/AgentBridge
   CLIENT_REPO: Graphene-Lab/GiraffeAI
+  STAGING: packaging/.proof-staging
 
 jobs:
   proof:
@@ -42,11 +48,15 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq flatpak flatpak-builder librsvg2-bin xvfb
 
+      - name: Setup .NET (for the NuGet lock/generator)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Resolve upstream tag + commit
         id: ver
         shell: bash
         run: |
-          UPSTREAM="${{ env.UPSTREAM }}"
           latest_tag() {
             curl -fsSL "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
               | python3 -c 'import sys,json; print(json.load(sys.stdin).get("tag_name") or "")' 2>/dev/null \
@@ -54,23 +64,16 @@ jobs:
           }
           TAG="${{ inputs.version }}"
           if [ -z "$TAG" ] || [ "$TAG" = "latest" ]; then
-            TAG="$(latest_tag "$UPSTREAM")"
+            TAG="$(latest_tag "${{ env.UPSTREAM }}")"
           fi
-          if [ -z "$TAG" ]; then
-            echo "::error::cannot resolve upstream release"
-            exit 1
-          fi
+          [ -n "$TAG" ] || { echo "::error::cannot resolve upstream release"; exit 1; }
           VER="${TAG#v}"
-          COMMIT="$(git ls-remote "https://github.com/${UPSTREAM}" "refs/tags/${TAG}" | cut -f1)"
-          if [ -z "$COMMIT" ]; then
-            echo "::error::cannot resolve commit of tag ${TAG}"
-            exit 1
-          fi
+          COMMIT="$(git ls-remote "https://github.com/${{ env.UPSTREAM }}" "refs/tags/${TAG}" | cut -f1)"
+          [ -n "$COMMIT" ] || { echo "::error::cannot resolve commit of tag ${TAG}"; exit 1; }
+          CTAG="$(latest_tag "${{ env.CLIENT_REPO }}")"
           echo "tag=$TAG version=$VER commit=$COMMIT"
           echo "VER=$VER" >> "$GITHUB_ENV"
           echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
-
-          CTAG="$(latest_tag "${{ env.CLIENT_REPO }}")"
           echo "CVER=${CTAG#v}" >> "$GITHUB_ENV"
 
       - name: Download Giraffe AI web client + compute checksum
@@ -88,6 +91,38 @@ jobs:
           echo "SDK_SHA256=$(sha256sum dotnet-sdk.tar.gz | cut -d' ' -f1)" >> "$GITHUB_ENV"
           ls -lh dotnet-sdk.tar.gz
           rm -f dotnet-sdk.tar.gz
+
+      - name: Clone AgentBridge source at the release commit
+        shell: bash
+        run: |
+          mkdir -p "${{ env.STAGING }}"
+          git clone --filter=blob:none --no-checkout \
+            "https://github.com/${{ env.UPSTREAM }}" "${{ env.STAGING }}/src"
+          git -C "${{ env.STAGING }}/src" checkout "${{ env.COMMIT }}"
+
+      - name: Generate nuget-sources.json (offline feed descriptor)
+        shell: bash
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/generator.py" \
+            https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/dotnet/flatpak-dotnet-generator.py
+          python3 "$RUNNER_TEMP/generator.py" \
+            packaging/source/nuget-sources.json \
+            "${{ env.STAGING }}/src/AgentBridge.csproj" \
+            --runtime linux-x64
+          python3 -c "import json;print('packages:',len(json.load(open('packaging/source/nuget-sources.json'))))"
+
+      - name: Stage payload (kokoro.onnx, Tools/, .playwright) from the release archive
+        shell: bash
+        run: |
+          mkdir -p "${{ env.STAGING }}/payload"
+          curl -fsSL -o release.tar.gz \
+            "https://github.com/${{ env.UPSTREAM }}/releases/download/v${VER}/agentbridge-linux-x64.tar.gz"
+          tar -xzf release.tar.gz -C "${{ env.STAGING }}/payload" \
+            ./Tools ./.playwright ./kokoro.onnx
+          rm -f release.tar.gz
+          ls -ld "${{ env.STAGING }}/payload"/.playwright "${{ env.STAGING }}/payload"/Tools \
+            || { echo "::error::payload staging incomplete"; exit 1; }
+          ls -lh "${{ env.STAGING }}/payload"/kokoro.onnx
 
       - name: Generate launcher icons (giraffe on brand gradient)
         shell: bash
@@ -139,7 +174,7 @@ jobs:
           sudo flatpak install --system -y --noninteractive flathub \
             org.gnome.Platform//48 org.gnome.Sdk//48
 
-      - name: Build engine from source (flatpak-builder, module network)
+      - name: Build engine from source (offline restore)
         shell: bash
         run: |
           sudo flatpak-builder \
@@ -161,5 +196,8 @@ jobs:
         shell: bash
         continue-on-error: true
         run: |
+          # Host runners have no XDG_RUNTIME_DIR for the ubuntu user — flatpak needs one.
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          chmod 700 "$XDG_RUNTIME_DIR"
           flatpak install --user -y --noninteractive ./agentbridge-source-proof.flatpak
           flatpak run --user --command=agent-desktop ${{ env.APPID }} --doctor

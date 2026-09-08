@@ -2,6 +2,11 @@ name: agentbridge
 base: core24
 version: @@VERSION@@
 summary: Self-hosted AI personal assistant
+title: AgentBridge
+contact: https://github.com/Graphene-Lab/AgentBridge/issues
+source-code: https://github.com/Graphene-Lab/AgentBridge
+website: https://graphenelab.it/AgentBridge/
+license: AGPL-3.0
 description: |
   AgentBridge is a self-hosted AI personal assistant (AGPL-3.0). It runs its own agents
   behind two interfaces in a single process: a full-screen chat terminal (TUI) and an

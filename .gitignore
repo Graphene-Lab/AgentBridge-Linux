@@ -14,4 +14,7 @@ giraffeai.zip
 # OS noise
 .DS_Store
 Thumbs.db
-__pycache__/  
+__pycache__/
+
+# Local-only project TODO (never pushed)
+TODO-LOCAL.md
